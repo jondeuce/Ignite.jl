@@ -1,0 +1,13 @@
+name = "Ignite"
+uuid = "1a1b1a28-7f47-4b26-86ef-080b8200110c"
+authors = ["Jonathan Doucette <jdoucette@physics.ubc.ca", "Christian Kames <ckames@physics.ubc.ca>"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
