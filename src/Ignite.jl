@@ -55,10 +55,10 @@ EventHandler(event::AbstractEvent) = EventHandler(; event)
             :batch        => nothing, # batch passed to `process_function`
             :output       => nothing, # output of `process_function` after a single iteration
             :last_event   => nothing, # last event fired
-            :counters     => DefaultOrderedDict{Type{<:AbstractPrimitiveEvent}, Int, Int}(0), # primitive event firing counters
-            :times        => OrderedDict{Type{<:AbstractPrimitiveEvent}, Float64}(), # dictionary with total and per-epoch times fetched on keys: EPOCH_COMPLETED and COMPLETED
+            :counters     => DefaultOrderedDict{AbstractPrimitiveEvent, Int, Int}(0), # primitive event firing counters
+            :times        => OrderedDict{AbstractPrimitiveEvent, Float64}(), # dictionary with total and per-epoch times fetched on keys: EPOCH_COMPLETED and COMPLETED
+            :metrics      => nothing, # dictionary with defined metrics
             # :seed       => nothing, # seed to set at each epoch
-            # :metrics    => nothing, # dictionary with defined metrics if any
         ),
     )
 end
@@ -122,8 +122,8 @@ check_should_terminate!(engine::Engine) = engine.should_terminate && terminate!(
 function load_batch!(engine::Engine)
     check_should_terminate!(engine)
 
-    engine.state.times[GET_BATCH_STARTED] = time()
-    fire_event!(engine, GET_BATCH_STARTED)
+    engine.state.times[GET_BATCH_STARTED()] = time()
+    fire_event!(engine, GET_BATCH_STARTED())
 
     batch_and_state = iterate(engine.state.dataloader...)
     (batch_and_state === nothing) && throw(DataLoaderException())
@@ -131,8 +131,8 @@ function load_batch!(engine::Engine)
     engine.state.batch = batch
     engine.state.dataloader = (engine.state.dataloader[1], state)
 
-    fire_event!(engine, GET_BATCH_COMPLETED)
-    engine.state.times[GET_BATCH_COMPLETED] = time() - engine.state.times[GET_BATCH_STARTED]
+    fire_event!(engine, GET_BATCH_COMPLETED())
+    engine.state.times[GET_BATCH_COMPLETED()] = time() - engine.state.times[GET_BATCH_STARTED()]
 
     return engine
 end
@@ -140,25 +140,25 @@ end
 function process_function!(engine::Engine)
     check_should_terminate!(engine)
 
-    engine.state.times[ITERATION_STARTED] = time()
-    fire_event!(engine, ITERATION_STARTED)
+    engine.state.times[ITERATION_STARTED()] = time()
+    fire_event!(engine, ITERATION_STARTED())
 
     engine.state.output = engine.process_function(engine, engine.state.batch)
 
-    fire_event!(engine, ITERATION_COMPLETED)
-    engine.state.times[ITERATION_COMPLETED] = time() - engine.state.times[ITERATION_STARTED]
+    fire_event!(engine, ITERATION_COMPLETED())
+    engine.state.times[ITERATION_COMPLETED()] = time() - engine.state.times[ITERATION_STARTED()]
 
     return engine
 end
 
-function fire_event!(engine::Engine, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent}
-    !(EVENT <: AbstractPrimitiveErrorEvent) && check_should_terminate!(engine)
+function fire_event!(engine::Engine, e::AbstractPrimitiveEvent)
+    !(e isa AbstractPrimitiveErrorEvent) && check_should_terminate!(engine)
 
-    engine.state.last_event = EVENT
-    engine.state.counters[EVENT] += 1
+    engine.state.last_event = e
+    engine.state.counters[e] += 1
 
     for handler in engine.event_handlers
-        fire_event!(engine, handler, EVENT)
+        fire_event!(engine, handler, e)
     end
 
     return engine
@@ -166,8 +166,8 @@ end
 
 #### EventHandler methods
 
-function fire_event!(engine::Engine, handler::EventHandler, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent}
-    if is_triggered(engine, handler.event, EVENT)
+function fire_event!(engine::Engine, handler::EventHandler, e::AbstractPrimitiveEvent)
+    if is_triggered_by(engine, handler.event, e)
         handler.handler!(engine)
     end
     return engine
@@ -190,13 +190,13 @@ function run!(
         try
             initialize!(engine, dataloader; max_epochs, epoch_length)
 
-            engine.state.times[STARTED] = time()
-            fire_event!(engine, STARTED)
+            engine.state.times[STARTED()] = time()
+            fire_event!(engine, STARTED())
 
             while engine.state.epoch < max_epochs && !engine.should_terminate
                 engine.state.epoch += 1
-                engine.state.times[EPOCH_STARTED] = time()
-                fire_event!(engine, EPOCH_STARTED)
+                engine.state.times[EPOCH_STARTED()] = time()
+                fire_event!(engine, EPOCH_STARTED())
 
                 epoch_iteration = 0
                 while epoch_iteration < epoch_length && !engine.should_terminate
@@ -207,17 +207,17 @@ function run!(
                     process_function!(engine)
                 end
 
-                fire_event!(engine, EPOCH_COMPLETED)
-                engine.state.times[EPOCH_COMPLETED] = time() - engine.state.times[EPOCH_STARTED]
+                fire_event!(engine, EPOCH_COMPLETED())
+                engine.state.times[EPOCH_COMPLETED()] = time() - engine.state.times[EPOCH_STARTED()]
 
-                hours, mins, secs = to_hours_mins_secs(engine.state.times[EPOCH_COMPLETED])
+                hours, mins, secs = to_hours_mins_secs(engine.state.times[EPOCH_COMPLETED()])
                 @info "Epoch[$(engine.state.epoch)] Complete. Time taken: $(hours):$(mins):$(secs)"
             end
 
-            fire_event!(engine, COMPLETED)
-            engine.state.times[COMPLETED] = time() - engine.state.times[STARTED]
+            fire_event!(engine, COMPLETED())
+            engine.state.times[COMPLETED()] = time() - engine.state.times[STARTED()]
 
-            hours, mins, secs = to_hours_mins_secs(engine.state.times[COMPLETED])
+            hours, mins, secs = to_hours_mins_secs(engine.state.times[COMPLETED()])
             @info "Engine run complete. Time taken: $(hours):$(mins):$(secs)"
 
         catch e
@@ -226,23 +226,23 @@ function run!(
 
             if e isa InterruptException
                 @info "User interrupt"
-                fire_event!(engine, INTERRUPT)
+                fire_event!(engine, INTERRUPT())
 
             elseif e isa TerminationException
                 @warn "Termination event triggered"
 
             elseif e isa DataLoaderException
                 @error "Dataloader is empty: `iterate(dataloader)` returned `nothing`"
-                fire_event!(engine, DATALOADER_STOP_ITERATION)
+                fire_event!(engine, DATALOADER_STOP_ITERATION())
 
             else
                 @error "Exception raised during training"
-                fire_event!(engine, EXCEPTION_RAISED)
+                fire_event!(engine, EXCEPTION_RAISED())
             end
 
         finally
             if engine.should_terminate
-                fire_event!(engine, TERMINATE)
+                fire_event!(engine, TERMINATE())
             end
         end
     end
@@ -253,15 +253,15 @@ end
 #### Helpers
 
 function every_filter(; every::Union{Int, <:AbstractVector{Int}})
-    function every_filter_inner(engine::Engine, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent}
-        count = engine.state.counters[EVENT]
+    function every_filter_inner(engine::Engine, e::AbstractPrimitiveEvent)
+        count = engine.state.counters[e]
         return count > 0 && any(mod1.(count, every) .== every)
     end
 end
 
 function once_filter(; once::Union{Int, <:AbstractVector{Int}})
-    function once_filter_inner(engine::Engine, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent}
-        count = engine.state.counters[EVENT]
+    function once_filter_inner(engine::Engine, e::AbstractPrimitiveEvent)
+        count = engine.state.counters[e]
         return count > 0 && any(count .== once)
     end
 end
@@ -280,14 +280,14 @@ function (::Type{EVENT})(; event_filter = nothing, every = nothing, once = nothi
     return FilteredEvent(; event = EVENT(), filter = filter)
 end
 
-is_triggered(::Engine, e::AbstractEvent, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent} = e isa EVENT
+is_triggered_by(::Engine, e1::AbstractEvent, e2::AbstractPrimitiveEvent) = e1 == e2
 
 @with_kw struct FilteredEvent{E <: AbstractEvent, F} <: AbstractEvent
     event::E
     filter::F = Returns(true)
 end
 
-is_triggered(engine::Engine, e::FilteredEvent, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent} = is_triggered(engine, e.event, EVENT) && e.filter(engine, EVENT)
+is_triggered_by(engine::Engine, e1::FilteredEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event, e2) && e1.filter(engine, e2)
 
 @with_kw struct OrEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
     event1::E1
@@ -295,7 +295,7 @@ is_triggered(engine::Engine, e::FilteredEvent, ::Type{EVENT}) where {EVENT <: Ab
 end
 Base.:|(event1::AbstractEvent, event2::AbstractEvent) = OrEvent(event1, event2)
 
-is_triggered(engine::Engine, e::OrEvent, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent} = is_triggered(engine, e.event1, EVENT) || is_triggered(engine, e.event2, EVENT)
+is_triggered_by(engine::Engine, e1::OrEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event1, e2) || is_triggered_by(engine, e1.event2, e2)
 
 @with_kw struct AndEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
     event1::E1
@@ -303,6 +303,6 @@ is_triggered(engine::Engine, e::OrEvent, ::Type{EVENT}) where {EVENT <: Abstract
 end
 Base.:&(event1::AbstractEvent, event2::AbstractEvent) = AndEvent(event1, event2)
 
-is_triggered(engine::Engine, e::AndEvent, ::Type{EVENT}) where {EVENT <: AbstractPrimitiveEvent} = is_triggered(engine, e.event1, EVENT) && is_triggered(engine, e.event2, EVENT)
+is_triggered_by(engine::Engine, e1::AndEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event1, e2) && is_triggered_by(engine, e1.event2, e2)
 
 end # module Ignite

@@ -1,7 +1,7 @@
 using Ignite
 using Test
 
-using Ignite: is_triggered, fire_event!, run!
+using Ignite: fire_event!, is_triggered_by
 using Logging: NullLogger
 
 @testset "Ignite.jl" begin
@@ -12,9 +12,9 @@ using Logging: NullLogger
         return engine, dataloader
     end
 
-    function fire_and_check_triggered(engine, event, E)
-        fire_event!(engine, E)
-        return is_triggered(engine, event, E)
+    function fire_and_check_triggered(engine, event, prim_event)
+        fire_event!(engine, prim_event)
+        return is_triggered_by(engine, event, prim_event)
     end
 
     @testset "EPOCH_STARTED" begin
@@ -22,9 +22,9 @@ using Logging: NullLogger
             trainer, _ = dummy_trainer_and_loader()
             event = EPOCH_STARTED(; every = 2)
             for i in 1:5
-                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED)
-                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED)
+                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED())
+                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED())
                 @test !t || (t && mod1(i, 2) == 2)
             end
         end
@@ -34,9 +34,9 @@ using Logging: NullLogger
             every = [2, 5, 7]
             event = EPOCH_STARTED(; every = every)
             for i in 1:25
-                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED)
-                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED)
+                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED())
+                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED())
                 @test !t || (t && any(mod1.(i, every) .== every))
             end
         end
@@ -46,9 +46,9 @@ using Logging: NullLogger
             once = [2, 5, 7]
             event = EPOCH_STARTED(; once = once)
             for i in 1:25
-                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED)
-                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED)
+                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+                @test !fire_and_check_triggered(trainer, event, ITERATION_COMPLETED())
+                t = fire_and_check_triggered(trainer, event, EPOCH_STARTED())
                 @test !t || (t && any(i .== once))
             end
         end
@@ -59,9 +59,9 @@ using Logging: NullLogger
             trainer, _ = dummy_trainer_and_loader()
             event = ITERATION_COMPLETED(; once = 4)
             for i in 1:7
-                @test !fire_and_check_triggered(trainer, event, EPOCH_STARTED)
-                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-                t = fire_and_check_triggered(trainer, event, ITERATION_COMPLETED)
+                @test !fire_and_check_triggered(trainer, event, EPOCH_STARTED())
+                @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+                t = fire_and_check_triggered(trainer, event, ITERATION_COMPLETED())
                 @test !t || (t && i == 4)
             end
         end
@@ -71,13 +71,13 @@ using Logging: NullLogger
         trainer, _ = dummy_trainer_and_loader()
         event_filter = (_engine, _event) -> _engine.state.new_field !== nothing
         event = EPOCH_COMPLETED(; every = 3) & EPOCH_COMPLETED(; event_filter)
-        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
+        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
         trainer.state.new_field = 1
-        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
-        @test fire_and_check_triggered(trainer, event, EPOCH_COMPLETED)
+        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+        @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
+        @test fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
     end
 
     @testset "run!" begin
@@ -93,7 +93,7 @@ using Logging: NullLogger
             add_event_handler!(trainer, TERMINATE()) do engine
                 termination_fired[] = true
             end
-            run!(trainer, dl; max_epochs, epoch_length)
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
             @test trainer.should_terminate
             @test trainer.state.iteration == epoch_length
@@ -124,7 +124,7 @@ using Logging: NullLogger
                 @test engine.state.epoch == max_epochs
                 @test engine.state.iteration == max_epochs * epoch_length
             end
-            run!(trainer, dl; max_epochs, epoch_length)
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
         end
 
         @testset "event ordering" begin
@@ -140,9 +140,9 @@ using Logging: NullLogger
                 terminate!(engine)
             end
 
-            run!(trainer, dl; max_epochs, epoch_length)
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
-            @test event_list == Any[EPOCH_COMPLETED, EPOCH_COMPLETED, ITERATION_COMPLETED, TERMINATE]
+            @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), ITERATION_COMPLETED(), TERMINATE()]
         end
 
         @testset "data loader" begin
@@ -155,7 +155,7 @@ using Logging: NullLogger
                 @test engine.state.iteration == length(dl)
                 fired[] = true
             end
-            run!(trainer, dl; max_epochs, epoch_length)
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
             @test fired[]
         end
