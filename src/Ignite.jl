@@ -57,8 +57,8 @@ EventHandler(event::AbstractEvent) = EventHandler(; event)
             :last_event   => nothing, # last event fired
             :counters     => DefaultOrderedDict{AbstractPrimitiveEvent, Int, Int}(0), # primitive event firing counters
             :times        => OrderedDict{AbstractPrimitiveEvent, Float64}(), # dictionary with total and per-epoch times fetched on keys: EPOCH_COMPLETED and COMPLETED
-            :metrics      => nothing, # dictionary with defined metrics
             # :seed       => nothing, # seed to set at each epoch
+            # :metrics      => nothing, # dictionary with defined metrics
         ),
     )
 end
@@ -178,11 +178,19 @@ function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
     return engine
 end
 
+function try_length(dataloader)
+    try
+        return length(dataloader)
+    catch e
+        error("`length` is not defined for this dataloader; must set `epoch_length` explicitly")
+    end
+end
+
 function run!(
         engine::Engine,
         dataloader = engine.dataloader;
-        max_epochs::Int,
-        epoch_length::Int,
+        max_epochs::Int = 1,
+        epoch_length::Int = try_length(dataloader),
     )
 
     logger = something(engine.logger, current_logger())
