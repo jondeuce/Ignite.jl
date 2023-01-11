@@ -1,7 +1,7 @@
 using Ignite
 using Test
 
-using Ignite: fire_event!, is_triggered
+using Ignite: is_triggered, fire_event!, run!
 using Logging: NullLogger
 
 @testset "Ignite.jl" begin
@@ -158,6 +158,12 @@ using Logging: NullLogger
             run!(trainer, dl; max_epochs, epoch_length)
 
             @test fired[]
+        end
+    end
+
+    @testset "README examples" begin
+        @testset "Quickstart" begin
+            #TODO
         end
     end
 end

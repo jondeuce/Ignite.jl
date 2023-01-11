@@ -6,7 +6,7 @@ using Parameters: @with_kw, @with_kw_noshow
 
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED, INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
-export run!, add_event_handler!
+export add_event_handler!
 
 """Abstract event type for construction compound events"""
 abstract type AbstractEvent end
@@ -41,7 +41,7 @@ struct DataLoaderException <: Exception end
 end
 EventHandler(event::AbstractEvent) = EventHandler(; event)
 
-# TODO: this could be a `DefaultOrderedDict`, if we don't care about get/setproperty-style access
+#TODO: this could be a `DefaultOrderedDict`, if we don't care about get/setproperty-style access
 """Engine state. Access and set properties with `getproperty` and `setproperty!`"""
 @with_kw_noshow struct State
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
