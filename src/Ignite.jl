@@ -84,21 +84,24 @@ end
     dataloader::Any = nothing
     state::State = State()
     event_handlers::Vector{EventHandler} = EventHandler[]
-    should_terminate::Bool = false
     logger::Union{Nothing, AbstractLogger} = nothing
+    should_terminate::Bool = false
     # should_terminate_single_epoch::Bool = false
     # should_interrupt::Bool = false
+    _dataloader_iter::Any = nothing
 end
 Engine(process_function; kwargs...) = Engine(; process_function, kwargs...)
 
 #### Engine methods
 
 function initialize!(engine::Engine, dataloader; max_epochs::Int, epoch_length::Int)
-    (dataloader !== nothing) && (engine.dataloader = dataloader)
     engine.should_terminate = false
     engine.state.iteration = 0
     engine.state.epoch = 0
-    engine.state.dataloader = (dataloader,) # initial args for `iterate`; after first iteration, will be a tuple `(dataloader, state)`
+    if dataloader !== nothing
+        engine.dataloader = dataloader
+        engine._dataloader_iter = (Iterators.cycle(dataloader),) # initial args for `iterate`; after first iteration, will be a tuple `(dataloader, state)`
+    end
     engine.state.max_epochs = max_epochs
     engine.state.epoch_length = epoch_length
     engine.state.last_event = nothing
@@ -125,11 +128,13 @@ function load_batch!(engine::Engine)
     engine.state.times[GET_BATCH_STARTED()] = time()
     fire_event!(engine, GET_BATCH_STARTED())
 
-    batch_and_state = iterate(engine.state.dataloader...)
+    # By default, `dataloader` should be wrapped in `Iterators.cycle` and therefore never finish
+    batch_and_state = iterate(engine._dataloader_iter...)
     (batch_and_state === nothing) && throw(DataLoaderException())
+
     batch, state = batch_and_state
     engine.state.batch = batch
-    engine.state.dataloader = (engine.state.dataloader[1], state)
+    engine._dataloader_iter = (engine._dataloader_iter[1], state)
 
     fire_event!(engine, GET_BATCH_COMPLETED())
     engine.state.times[GET_BATCH_COMPLETED()] = time() - engine.state.times[GET_BATCH_STARTED()]
@@ -240,7 +245,7 @@ function run!(
                 @warn "Termination event triggered"
 
             elseif e isa DataLoaderException
-                @error "Dataloader is empty: `iterate(dataloader)` returned `nothing`"
+                @error "Restarting data loader failed: `iterate(dataloader)` returned `nothing`"
                 fire_event!(engine, DATALOADER_STOP_ITERATION())
 
             else

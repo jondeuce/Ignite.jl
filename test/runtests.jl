@@ -145,14 +145,13 @@ using Logging: NullLogger
             @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), ITERATION_COMPLETED(), TERMINATE()]
         end
 
-        @testset "data loader" begin
+        @testset "empty data loader" begin
             max_epochs, epoch_length = 7, 3
             trainer, _ = dummy_trainer_and_loader(; max_epochs, epoch_length)
-            dl = [rand(3) for _ in 1:11]
+            dl = []
 
             fired = Ref(false)
             add_event_handler!(trainer, DATALOADER_STOP_ITERATION()) do engine
-                @test engine.state.iteration == length(dl)
                 fired[] = true
             end
             Ignite.run!(trainer, dl; max_epochs, epoch_length)
