@@ -4,9 +4,10 @@ using Logging: AbstractLogger, NullLogger, current_logger, global_logger, with_l
 using DataStructures: DefaultOrderedDict, OrderedDict
 using Parameters: @with_kw, @with_kw_noshow
 
+export AbstractEvent, AbstractPrimitiveEvent, AbstractPrimitiveErrorEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED, INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
-export add_event_handler!
+export add_event_handler!, fire_event!
 
 """Abstract event type for construction compound events"""
 abstract type AbstractEvent end
@@ -171,6 +172,7 @@ end
 
 #### EventHandler methods
 
+"""Fire event handler if it is triggered by the primitive event `e`."""
 function fire_event!(engine::Engine, handler::EventHandler, e::AbstractPrimitiveEvent)
     if is_triggered_by(engine, handler.event, e)
         handler.handler!(engine)
@@ -178,9 +180,17 @@ function fire_event!(engine::Engine, handler::EventHandler, e::AbstractPrimitive
     return engine
 end
 
+"""Add event handler to engine."""
 function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
     push!(engine.event_handlers, EventHandler(event, handler))
     return engine
+end
+
+"""`@on engine event handler` is syntax sugar for `add_event_handler!(handler, engine, event)`."""
+macro on(engine, event, handler)
+    quote
+        add_event_handler!($(esc(handler)), $(esc(engine)), $(esc(event)))
+    end
 end
 
 function try_length(dataloader)

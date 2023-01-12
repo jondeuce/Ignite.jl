@@ -1,7 +1,6 @@
 using Ignite
 using Test
 
-using Ignite: fire_event!, is_triggered_by
 using Logging: NullLogger
 
 @testset "Ignite.jl" begin
@@ -14,7 +13,7 @@ using Logging: NullLogger
 
     function fire_and_check_triggered(engine, event, prim_event)
         fire_event!(engine, prim_event)
-        return is_triggered_by(engine, event, prim_event)
+        return Ignite.is_triggered_by(engine, event, prim_event)
     end
 
     @testset "EPOCH_STARTED" begin

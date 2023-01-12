@@ -13,23 +13,32 @@ Additionally, `Ignite.jl` allows users to define custom events and stack events 
 
 ## Quick Start
 
+The example below demonstrates how to use `Ignite.jl` to train a simple neural network while keeping track of evaluation metrics and displaying them every 5 epochs. Key features to note:
+
+* The training step is factored out of the training loop: the `train_step` function takes a batch of training data and computes the loss, gradients, and updates the model parameters.
+* Events are flexibly added to the training and evaluation engines to customize training: the `evaluator` logs metrics, and the `trainer` runs the evaluator every 5 epochs.
+* Data loaders can be any iterable collection. Here we use a [`DataLoader`](https://juliaml.github.io/MLUtils.jl/stable/api/#MLUtils.DataLoader) from [`MLUtils.jl`](https://github.com/JuliaML/MLUtils.jl)
+
 ```julia
 using Ignite
-using Flux, Zygote, Optimisers # for training a neural network
+using Flux, Zygote, Optimisers, MLUtils # for training a neural network
 using OnlineStats: Mean, fit! # for tracking evaluation metrics
 
+# Build simple neural network and initialize Adam optimizer
 model = Chain(Dense(1 => 32, tanh), Dense(32 => 1))
 optim = Optimisers.setup(Optimisers.Adam(1f-3), model)
 
-# Data loaders can be any iterable
-dummy_data(x) = (x, @. 2x-x^3)
-train_data_loader = Iterators.cycle([dummy_data(randn(Float32, 1, 10)) for _ in 1:1000]) # iterator can be infinite
-eval_data_loader = [dummy_data(randn(Float32, 1, 10)) for _ in 1:10]
+# Creat mock data and data loaders
+f(x) = 2x-x^3
+xtrain, xtest = randn(1, 10_000), randn(1, 100)
+ytrain, ytest = f.(xtrain), f.(xtest)
+train_data_loader = DataLoader((; x = xtrain, y = ytrain); batchsize = 64, shuffle = true, partial = false)
+eval_data_loader = DataLoader((; x = xtest, y = ytest); batchsize = 10, shuffle = false)
 
 # Create training engine:
 #   - `engine` is a reference to the parent `trainer` engine, created below
 #   - `batch` is a batch of training data, retrieved by iterating `train_data_loader`
-#   - (Optional) return value is stored in `trainer.state.output`
+#   - (optional) return value is stored in `trainer.state.output`
 function train_step(engine, batch)
     x, y = batch
     l, gs = Zygote.withgradient(m -> sum(abs2, m(x) .- y), model)
@@ -54,7 +63,6 @@ end
 add_event_handler!(evaluator, ITERATION_COMPLETED()) do engine
     o = engine.state.output
     m = engine.state.metrics["abs_err"]
-    @show engine.state
     fit!(m, abs.(o["ytrue"] .- o["ypred"]) |> vec)
 end
 
@@ -66,4 +74,68 @@ end
 
 # Start the training
 Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 1_000)
+```
+
+### Periodically save model
+
+Easily add custom functionality to your training process without modifying existing code by incorporating new events. For example, saving the current model and optimizer state to disk every 10 epochs using [`BSON.jl`](https://github.com/JuliaIO/BSON.jl):
+
+```julia
+using BSON
+
+# Save model and optimizer state every 10 epochs
+add_event_handler!(trainer, EPOCH_COMPLETED(every = 10)) do engine
+    @save "model_and_optim.bson" model optim
+    @info "Saved model and optimizer state to disk"
+end
+```
+
+### Execute any number of functions per event
+
+Multiple handlers can be added to the same event:
+
+```julia
+function on_training_ended(engine)
+    @info "Training is ended"
+end
+add_event_handler!(on_training_ended, trainer, COMPLETED())
+add_event_handler!(engine -> display(engine.state.times), trainer, COMPLETED())
+```
+
+### Attach the same handler to multiple events
+
+The boolean operators `|` and `&` can be used to combine events:
+
+```julia
+add_event_handler!(trainer, COMPLETED() | EPOCH_COMPLETED(every = 10)) do engine
+    # ...
+end
+```
+
+### Fire custom events
+
+Custom events can be created to track different stages in the training process, such as the start and finish of the backward pass and optimizer step, by defining new event types that inherit from `AbstractPrimitiveEvent` and firing them at appropriate points in the train_step function using `fire_event!`:
+
+```julia
+struct BACKWARD_STARTED <: AbstractPrimitiveEvent end
+struct BACKWARD_COMPLETED <: AbstractPrimitiveEvent end
+struct OPTIM_STEP_STARTED <: AbstractPrimitiveEvent end
+struct OPTIM_STEP_COMPLETED <: AbstractPrimitiveEvent end
+
+function train_step(engine, batch)
+    x, y = batch
+
+    # Compute the gradients of the loss with respect to the model
+    fire_event!(engine, BACKWARD_STARTED())
+    l, gs = Zygote.withgradient(m -> sum(abs2, m(x) .- y), model)
+    fire_event!(engine, BACKWARD_COMPLETED())
+
+    # Update the model's parameters
+    fire_event!(engine, OPTIM_STEP_STARTED())
+    global optim, model = Optimisers.update!(optim, model, gs[1])
+    fire_event!(engine, OPTIM_STEP_COMPLETED())
+
+    return Dict("loss" => l)
+end
+trainer = Engine(train_step)
 ```
