@@ -2,11 +2,14 @@
 CurrentModule = Ignite
 ```
 
-# Ignite
+# Ignite.jl
 
-Documentation for [Ignite](https://github.com/jondeuce/Ignite.jl).
+Documentation for [Ignite.jl](https://github.com/jondeuce/Ignite.jl).
+
+## [Docstrings](@id docstrings)
 
 ```@index
+Modules = [Ignite]
 ```
 
 ```@autodocs

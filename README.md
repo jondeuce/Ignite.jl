@@ -7,9 +7,9 @@
 
 Welcome to `Ignite.jl`, a Julia port of the Python library [`ignite`](https://github.com/pytorch/ignite) for simplifying neural network training and validation loops using events and handlers.
 
-`Ignite.jl` provides a simple engine and event system. This allows a user to easily compose training pipelines with events such artifact saving, metric logging, and model validation. Event handlers can be any Julia function, and they can be easily configured to run at specific times during training, offering unparalleled flexibility compared to other approaches like callbacks.
+`Ignite.jl` provides a simple yet flexible engine and event system, allowing for the easy composition of training pipelines with various events such as artifact saving, metric logging, and model validation. Event-based training abstracts away the training loop, replacing it with 1) a training engine which executes a single training step, 2) a data loader for the engine to iterate over, and 3) events and corresponding handlers which are attached to the engine, configured to fire at specific points during training.
 
-Additionally, `Ignite.jl` allows users to define custom events and stack events together to enable multiple calls, giving users even more control over their training process.
+Event handlers much more flexibile compared to other approaches like callbacks: they can be any callable, multiple handlers can be attached to a single event, multiple events can trigger the same handler, and custom events can be defined to fire at user-specified points during training. This makes adding functionality to your training pipeline easy, minimizing the need to modify existing code.
 
 ## Quick Start
 
