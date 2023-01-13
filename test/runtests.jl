@@ -66,6 +66,17 @@ using Logging: NullLogger
         end
     end
 
+    @testset "throttle filter" begin
+        engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
+        filter = throttle_filter(0.1)
+        @test !filter(engine, event)
+        sleep(0.05); @test !filter(engine, event)
+        sleep(0.05); @test filter(engine, event)
+        sleep(0.025); @test !filter(engine, event)
+        sleep(0.025); @test !filter(engine, event)
+        sleep(0.05); @test filter(engine, event)
+    end
+
     @testset "OrEvent" begin
         trainer, _ = dummy_trainer_and_loader()
         event_filter = (_engine, _event) -> _engine.state.new_field !== nothing

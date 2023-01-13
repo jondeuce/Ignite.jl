@@ -11,7 +11,7 @@ using Parameters: @with_kw, @with_kw_noshow
 export AbstractEvent, AbstractPrimitiveEvent, AbstractPrimitiveErrorEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
 export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
-export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
+export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent, every_filter, once_filter, throttle_filter
 export add_event_handler!, fire_event!
 
 """
@@ -370,6 +370,31 @@ end
 
 #### Helpers
 
+@with_kw struct EveryFilter{T}
+    every::T
+end
+function (f::EveryFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+    count = engine.state.counters[e]
+    return count > 0 && any(mod1.(count, f.every) .== f.every)
+end
+
+@with_kw struct OnceFilter{T}
+    once::T
+end
+function (f::OnceFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+    count = engine.state.counters[e]
+    return count > 0 && any(count .== f.once)
+end
+
+@with_kw struct ThrottleFilter
+    throttle::Float64
+    last_fire::Base.RefValue{Float64}
+end
+function (f::ThrottleFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+    t = time()
+    return t - f.last_fire[] >= f.throttle ? (f.last_fire[] = t; true) : false
+end
+
 """
     $(TYPEDSIGNATURES)
 
@@ -377,12 +402,7 @@ Creates a filter function for use in a `FilteredEvent` that returns `true` perio
 * If `every = n::Int`, the filter will trigger every `n`th firing of the event. 
 * If `every = Int[n₁, n₂, ...]`, the filter will trigger every `n₁`th firing, every `n₂`th firing, and so on.
 """
-function every_filter(; every::Union{Int, <:AbstractVector{Int}})
-    function every_filter_inner(engine::Engine, e::AbstractPrimitiveEvent)
-        count = engine.state.counters[e]
-        return count > 0 && any(mod1.(count, every) .== every)
-    end
-end
+every_filter(every::Union{Int, <:AbstractVector{Int}}) = EveryFilter(every)
 
 """
     $(TYPEDSIGNATURES)
@@ -391,12 +411,14 @@ Creates a filter function for use in a `FilteredEvent` that returns `true` at sp
 * If `once = n::Int`, the filter will trigger only on the `n`th firing of the event. 
 * If `once = Int[n₁, n₂, ...]`, the filter will trigger only on the `n₁`th firing, the `n₂`th firing, and so on.
 """
-function once_filter(; once::Union{Int, <:AbstractVector{Int}})
-    function once_filter_inner(engine::Engine, e::AbstractPrimitiveEvent)
-        count = engine.state.counters[e]
-        return count > 0 && any(count .== once)
-    end
-end
+once_filter(once::Union{Int, <:AbstractVector{Int}}) = OnceFilter(once)
+
+"""
+    $(TYPEDSIGNATURES)
+
+Creates a filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
+"""
+throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(time()))
 
 function to_hours_mins_secs(time_taken)
     mins, secs = divrem(time_taken, 60.0)
@@ -408,7 +430,7 @@ end
 
 function (::Type{EVENT})(; event_filter = nothing, every = nothing, once = nothing) where {EVENT <: AbstractPrimitiveEvent}
     @assert sum(!isnothing, (event_filter, every, once)) == 1 "Exactly one of `event_filter`, `every`, `once` must be supplied"
-    filter = every !== nothing ? every_filter(; every) : once !== nothing ? once_filter(; once) : event_filter
+    filter = every !== nothing ? every_filter(every) : once !== nothing ? once_filter(once) : event_filter
     return FilteredEvent(; event = EVENT(), filter = filter)
 end
 

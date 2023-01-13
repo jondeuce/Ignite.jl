@@ -90,15 +90,14 @@ add_event_handler!(trainer, EPOCH_COMPLETED(every = 10)) do engine
 end
 ```
 
-### Execute any number of functions per event
+### Trigger multiple functions per event
 
-Multiple handlers can be added to the same event:
+Multiple event handlers can be added to the same event:
 
 ```julia
-function on_training_ended(engine)
+add_event_handler!(trainer, COMPLETED()) do engine
     @info "Training is ended"
 end
-add_event_handler!(on_training_ended, trainer, COMPLETED())
 add_event_handler!(engine -> display(engine.state.times), trainer, COMPLETED())
 ```
 
@@ -108,13 +107,20 @@ The boolean operators `|` and `&` can be used to combine events:
 
 ```julia
 add_event_handler!(trainer, COMPLETED() | EPOCH_COMPLETED(every = 10)) do engine
-    # ...
+    # Runs at the end of every 10th epoch, or when training is completed
+end
+
+throttled_event = EPOCH_COMPLETED(; every = 3) & EPOCH_COMPLETED(; event_filter = throttle_filter(30.0))
+add_event_handler!(trainer, throttled_event) do engine
+    # Runs at the end of every 3rd epoch if at least 30s has passed since the last firing
 end
 ```
 
-### Fire custom events
+### Define custom events
 
-Custom events can be created to track different stages in the training process, such as the start and finish of the backward pass and optimizer step, by defining new event types that inherit from `AbstractPrimitiveEvent` and firing them at appropriate points in the train_step function using `fire_event!`:
+Custom events can be created to track different stages in the training process.
+
+For example, suppose we want to define events that fire at the start and finish of the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractPrimitiveEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
 
 ```julia
 struct BACKWARD_STARTED <: AbstractPrimitiveEvent end
@@ -138,4 +144,12 @@ function train_step(engine, batch)
     return Dict("loss" => l)
 end
 trainer = Engine(train_step)
+```
+
+Then, add event handlers for these custom events as usual:
+
+```julia
+add_event_handler!(trainer, BACKWARD_COMPLETED(every = 10)) do engine
+    # This code runs after every 10th backward pass is completed
+end
 ```
