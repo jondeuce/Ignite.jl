@@ -304,10 +304,9 @@ function run!(
         if epoch_length <= 0
             epoch_length = try_length(dataloader)
         end
+        initialize!(engine, dataloader; max_epochs, epoch_length)
 
         try
-            initialize!(engine, dataloader; max_epochs, epoch_length)
-
             engine.state.times[STARTED()] = time()
             fire_event!(engine, STARTED())
 
