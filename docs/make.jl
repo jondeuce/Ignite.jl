@@ -11,7 +11,7 @@ makedocs(;
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://jondeuce.github.io/Ignite.jl",
-        edit_link="main",
+        edit_link="master",
         assets=String[],
     ),
     pages=[
@@ -21,5 +21,5 @@ makedocs(;
 
 deploydocs(;
     repo="github.com/jondeuce/Ignite.jl",
-    devbranch="main",
+    devbranch="master",
 )
