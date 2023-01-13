@@ -9,7 +9,8 @@ using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
 using Parameters: @with_kw, @with_kw_noshow
 
 export AbstractEvent, AbstractPrimitiveEvent, AbstractPrimitiveErrorEvent
-export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED, INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
+export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
+export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
 export add_event_handler!, fire_event!
 
@@ -43,12 +44,12 @@ struct DATALOADER_STOP_ITERATION <: AbstractPrimitiveErrorEvent end
 struct TERMINATE <: AbstractPrimitiveErrorEvent end
 
 struct TerminationException <: Exception end
-struct DataLoaderException <: Exception end
+struct DataLoaderEmptyException <: Exception end
 
 """
     $(TYPEDEF)
 
-`EventHandler(event::E, handler!::H = Returns(nothing))` wraps an `event` and fires the corresponding `handler!` when `event` is triggered.
+`EventHandler(event::E, handler!::H)` wraps an `event` and fires the corresponding `handler!` when `event` is triggered.
 
 Fields: $(TYPEDFIELDS)
 """
@@ -57,9 +58,8 @@ Fields: $(TYPEDFIELDS)
     event::E
 
     "Event handler which executes when triggered by `event`"
-    handler!::H = Returns(nothing)
+    handler!::H
 end
-EventHandler(event::AbstractEvent) = EventHandler(; event)
 
 """
     $(TYPEDEF)
@@ -186,7 +186,7 @@ function load_batch!(engine::Engine)
 
     # By default, `dataloader` should be wrapped in `Iterators.cycle` and therefore never finish
     batch_and_state = iterate(engine._dataloader_iter...)
-    (batch_and_state === nothing) && throw(DataLoaderException())
+    (batch_and_state === nothing) && throw(DataLoaderEmptyException())
 
     batch, state = batch_and_state
     engine.state.batch = batch
@@ -262,7 +262,8 @@ function try_length(dataloader)
     try
         return length(dataloader)
     catch e
-        error("`length` is not defined for this dataloader; must set `epoch_length` explicitly")
+        @error "`length` is not defined for this dataloader; must set `epoch_length` explicitly"
+        throw(e)
     end
 end
 
@@ -295,11 +296,15 @@ function run!(
         engine::Engine,
         dataloader = engine.dataloader;
         max_epochs::Int = 1,
-        epoch_length::Int = try_length(dataloader),
+        epoch_length::Int = 0,
     )
 
     logger = something(engine.logger, current_logger())
     with_logger(logger) do
+        if epoch_length <= 0
+            epoch_length = try_length(dataloader)
+        end
+
         try
             initialize!(engine, dataloader; max_epochs, epoch_length)
 
@@ -344,7 +349,7 @@ function run!(
             elseif e isa TerminationException
                 @warn "Termination event triggered"
 
-            elseif e isa DataLoaderException
+            elseif e isa DataLoaderEmptyException
                 @error "Restarting data loader failed: `iterate(dataloader)` returned `nothing`"
                 fire_event!(engine, DATALOADER_STOP_ITERATION())
 
