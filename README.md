@@ -18,7 +18,7 @@ The example below demonstrates how to use `Ignite.jl` to train a simple neural n
 * Events are flexibly added to the training and evaluation engines to customize training: the `evaluator` logs metrics, and the `trainer` runs the evaluator every 5 epochs.
 * Data loaders can be any iterable collection. Here we use a [`DataLoader`](https://juliaml.github.io/MLUtils.jl/stable/api/#MLUtils.DataLoader) from [`MLUtils.jl`](https://github.com/JuliaML/MLUtils.jl)
 
-```julia
+````julia
 using Ignite
 using Flux, Zygote, Optimisers, MLUtils # for training a neural network
 using OnlineStats: Mean, fit! # for tracking evaluation metrics
@@ -73,38 +73,38 @@ end
 
 # Start the training
 Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 1_000)
-```
+````
 
 ### Periodically save model
 
 Easily add custom functionality to your training process without modifying existing code by incorporating new events. For example, saving the current model and optimizer state to disk every 10 epochs using [`BSON.jl`](https://github.com/JuliaIO/BSON.jl):
 
-```julia
-using BSON
+````julia
+using BSON: @save
 
 # Save model and optimizer state every 10 epochs
 add_event_handler!(trainer, EPOCH_COMPLETED(every = 10)) do engine
     @save "model_and_optim.bson" model optim
     @info "Saved model and optimizer state to disk"
 end
-```
+````
 
 ### Trigger multiple functions per event
 
 Multiple event handlers can be added to the same event:
 
-```julia
+````julia
 add_event_handler!(trainer, COMPLETED()) do engine
     @info "Training is ended"
 end
 add_event_handler!(engine -> display(engine.state.times), trainer, COMPLETED())
-```
+````
 
 ### Attach the same handler to multiple events
 
 The boolean operators `|` and `&` can be used to combine events:
 
-```julia
+````julia
 add_event_handler!(trainer, COMPLETED() | EPOCH_COMPLETED(every = 10)) do engine
     # Runs at the end of every 10th epoch, or when training is completed
 end
@@ -113,7 +113,7 @@ throttled_event = EPOCH_COMPLETED(; every = 3) & EPOCH_COMPLETED(; event_filter 
 add_event_handler!(trainer, throttled_event) do engine
     # Runs at the end of every 3rd epoch if at least 30s has passed since the last firing
 end
-```
+````
 
 ### Define custom events
 
@@ -121,7 +121,7 @@ Custom events can be created to track different stages in the training process.
 
 For example, suppose we want to define events that fire at the start and finish of the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractPrimitiveEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
 
-```julia
+````julia
 struct BACKWARD_STARTED <: AbstractPrimitiveEvent end
 struct BACKWARD_COMPLETED <: AbstractPrimitiveEvent end
 struct OPTIM_STEP_STARTED <: AbstractPrimitiveEvent end
@@ -143,12 +143,17 @@ function train_step(engine, batch)
     return Dict("loss" => l)
 end
 trainer = Engine(train_step)
-```
+````
 
 Then, add event handlers for these custom events as usual:
 
-```julia
+````julia
 add_event_handler!(trainer, BACKWARD_COMPLETED(every = 10)) do engine
     # This code runs after every 10th backward pass is completed
 end
-```
+````
+
+---
+
+*This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
+

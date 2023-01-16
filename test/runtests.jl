@@ -224,10 +224,4 @@ using Logging: NullLogger
             @test fired[]
         end
     end
-
-    @testset "README examples" begin
-        @testset "Quickstart" begin
-            #TODO
-        end
-    end
 end
