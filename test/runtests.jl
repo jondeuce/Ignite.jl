@@ -115,16 +115,19 @@ using Logging: NullLogger
         @testset "early termination" begin
             max_epochs, epoch_length = 3, 5
             trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
+
             add_event_handler!(trainer, EPOCH_COMPLETED()) do engine
                 @test engine.state.output isa Dict
                 @test engine.state.output["loss"] isa Float64
                 engine.should_terminate = true
             end
+
             termination_fired = Ref(false)
             add_event_handler!(trainer, TERMINATE()) do engine
                 termination_fired[] = true
             end
-            Ignite.run!(trainer, dl; max_epochs, epoch_length)
+
+            @test_throws Ignite.TerminationException Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
             @test trainer.should_terminate
             @test trainer.state.iteration == epoch_length
@@ -172,7 +175,7 @@ using Logging: NullLogger
                 throw(InterruptException())
             end
 
-            Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test_throws InterruptException Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
             @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), INTERRUPT(), TERMINATE()]
         end
@@ -188,6 +191,7 @@ using Logging: NullLogger
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
                 @test engine.state.batch == dl[mod1(engine.state.iteration, length(dl))]
             end
+
             Ignite.run!(trainer, dl)
         end
 
@@ -202,6 +206,7 @@ using Logging: NullLogger
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
                 @test engine.state.batch == dl[mod1(engine.state.iteration, length(dl))]
             end
+
             Ignite.run!(trainer, dl)
         end
 
@@ -214,8 +219,8 @@ using Logging: NullLogger
             add_event_handler!(trainer, DATALOADER_STOP_ITERATION()) do engine
                 fired[] = true
             end
-            Ignite.run!(trainer, dl; max_epochs, epoch_length)
 
+            @test_throws Ignite.DataLoaderEmptyException Ignite.run!(trainer, dl; max_epochs, epoch_length)
             @test fired[]
         end
     end
