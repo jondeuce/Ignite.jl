@@ -223,5 +223,23 @@ using Logging: NullLogger
             @test_throws Ignite.DataLoaderEmptyException Ignite.run!(trainer, dl; max_epochs, epoch_length)
             @test fired[]
         end
+
+        @testset "many handlers" begin
+            max_epochs, epoch_length = 7, 3
+            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
+
+            num_handlers = 1000
+            events = [STARTED(), EPOCH_STARTED(), ITERATION_STARTED(), ITERATION_COMPLETED(), EPOCH_COMPLETED(), COMPLETED()]
+            buffer = zeros(Int, num_handlers)
+
+            for (i, event) in zip(1:num_handlers, Iterators.cycle(events))
+                add_event_handler!(trainer, event) do engine
+                    return buffer[i] = i
+                end
+            end
+
+            Ignite.run!(trainer, dl)
+            @test buffer == 1:num_handlers
+        end
     end
 end

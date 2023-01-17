@@ -248,12 +248,31 @@ function fire_event!(engine::Engine, e::AbstractPrimitiveEvent)
 
     engine.state.last_event = e
     engine.state.counters[e] += 1
-
-    for handler in engine.event_handlers
-        fire_event!(engine, handler, e)
-    end
+    fire_event_handlers!(engine, e)
 
     return engine
+end
+
+function fire_event_handlers!(engine::Engine, e::AbstractPrimitiveEvent)
+    if length(engine.event_handlers) <= 256
+        # Make the common case fast via loop unrolling
+        fire_event_handlers_generated!(engine, (engine.event_handlers...,), e)
+    else
+        # Fallback to a dynamic loop for large numbers of handlers
+        fire_event_handlers_loop!(engine, engine.event_handlers, e)
+    end
+end
+
+@generated function fire_event_handlers_generated!(engine::Engine, handlers::H, e::AbstractPrimitiveEvent) where {N, H <: Tuple{Vararg{EventHandler, N}}}
+    quote
+        Base.Cartesian.@nexprs $N i -> fire_event!(engine, handlers[i], e)
+    end
+end
+
+function fire_event_handlers_loop!(engine::Engine, handlers::AbstractVector{EventHandler}, e::AbstractPrimitiveEvent)
+    for handler in handlers
+        fire_event!(engine, handler, e)
+    end
 end
 
 #### EventHandler methods
