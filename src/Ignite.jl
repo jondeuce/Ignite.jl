@@ -44,7 +44,7 @@ If this is undesired, one can instead inherit from the supertype `AbstractFiring
 """
 abstract type AbstractLoopEvent <: AbstractFiringEvent end
 
-(EVENT::Type{<:AbstractLoopEvent})(; event_filter = nothing, every = nothing, once = nothing) = filter_event(EVENT(); event_filter, every, once)
+(EVENT::Type{<:AbstractLoopEvent})(; kwargs...) = filter_event(EVENT(); kwargs...)
 
 """
 $(TYPEDEF)
@@ -104,7 +104,7 @@ Current state of the engine.
 Fields can be accessed and modified using `getproperty` and `setproperty!`.
 For example, `engine.state.iteration` can be used to access the current iteration, and `engine.state.new_field = value` can be used to store `value` for later use e.g. by an event handler.
 """
-@with_kw_noshow struct State
+@with_kw_noshow struct State <: AbstractDict{Symbol, Any}
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
         nothing,
         OrderedDict{Symbol, Any}(
@@ -112,11 +112,11 @@ For example, `engine.state.iteration` can be used to access the current iteratio
             :epoch        => nothing, # 1-based, the first epoch is 1
             :max_epochs   => nothing, # number of epochs to run
             :epoch_length => nothing, # number of batches processed per epoch
-            :batch        => nothing, # batch passed to `process_function`
-            :output       => nothing, # output of `process_function` after a single iteration
-            :last_event   => nothing, # last event fired
-            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event firing counters
-            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # dictionary with total and per-epoch times fetched on firing event keys
+            :batch        => nothing, # most recent batch passed to `process_function`
+            :output       => nothing, # most recent output of `process_function`
+            :last_event   => nothing, # most recent event fired
+            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event counters
+            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # firing event times
             # :seed       => nothing, # seed to set at each epoch
             # :metrics    => nothing, # dictionary with defined metrics
         ),
@@ -124,8 +124,10 @@ For example, `engine.state.iteration` can be used to access the current iteratio
 end
 state(s::State) = getfield(s, :state)
 
-Base.getproperty(s::State, k::Symbol) = getindex(state(s), k)
-Base.setproperty!(s::State, k::Symbol, v) = setindex!(state(s), v, k)
+Base.getindex(s::State, k::Symbol) = getindex(state(s), k)
+Base.setindex!(s::State, v, k::Symbol) = setindex!(state(s), v, k)
+Base.getproperty(s::State, k::Symbol) = s[k]
+Base.setproperty!(s::State, k::Symbol, v) = (s[k] = v)
 
 Base.show(io::IO, ::State) = print(io, "Engine state")
 

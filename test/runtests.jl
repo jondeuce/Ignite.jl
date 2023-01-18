@@ -4,10 +4,6 @@ using Test
 using Aqua: test_all
 using Logging: NullLogger
 
-@testset "Aqua.jl" begin
-    test_all(Ignite)
-end
-
 @testset "Ignite.jl" begin
     function dummy_trainer_and_loader(; max_epochs = 10, epoch_length = 10)
         process_function = (_engine, _batch) -> Dict{String, Any}("loss" => sum(map(sum, _batch)))
@@ -246,5 +242,33 @@ end
             Ignite.run!(trainer, dl)
             @test buffer == 1:num_handlers
         end
+
+        @testset "custom events" begin
+            struct NEW_LOOP_EVENT <: AbstractLoopEvent end
+            struct NEW_FIRING_EVENT <: AbstractFiringEvent end
+
+            @test NEW_LOOP_EVENT(every = 3) isa FilteredEvent
+            @test_throws MethodError NEW_FIRING_EVENT(every = 3)
+
+            trainer = Engine(logger = NullLogger()) do engine, batch
+                fire_event!(engine, NEW_LOOP_EVENT())
+                fire_event!(engine, NEW_FIRING_EVENT())
+                return nothing
+            end
+
+            loop_event_counter, firing_event_counter = Ref(0), Ref(0)
+            add_event_handler!(_ -> loop_event_counter[] += 1, trainer, NEW_LOOP_EVENT(every = 3))
+            add_event_handler!(_ -> firing_event_counter[] += 1, trainer, NEW_FIRING_EVENT())
+
+            Ignite.run!(trainer, [1]; epoch_length = 12)
+
+            @test loop_event_counter[] == 4
+            @test firing_event_counter[] == 12
+        end
     end
+end
+
+# (A)uto (QU)ality (A)ssurance tests
+@testset "Aqua.jl" begin
+    test_all(Ignite)
 end
