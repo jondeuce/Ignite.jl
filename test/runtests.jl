@@ -1,7 +1,12 @@
 using Ignite
 using Test
 
+using Aqua: test_all
 using Logging: NullLogger
+
+@testset "Aqua.jl" begin
+    test_all(Ignite)
+end
 
 @testset "Ignite.jl" begin
     function dummy_trainer_and_loader(; max_epochs = 10, epoch_length = 10)
@@ -68,13 +73,13 @@ using Logging: NullLogger
 
     @testset "throttle filter" begin
         engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
-        filter = throttle_filter(0.1)
-        @test !filter(engine, event)
-        sleep(0.05); @test !filter(engine, event)
-        sleep(0.05); @test filter(engine, event)
-        sleep(0.025); @test !filter(engine, event)
-        sleep(0.025); @test !filter(engine, event)
-        sleep(0.05); @test filter(engine, event)
+        event_filter = throttle_filter(0.1)
+        @test !event_filter(engine, event)
+        sleep(0.050); @test !event_filter(engine, event)
+        sleep(0.050); @test event_filter(engine, event)
+        sleep(0.025); @test !event_filter(engine, event)
+        sleep(0.025); @test !event_filter(engine, event)
+        sleep(0.050); @test event_filter(engine, event)
     end
 
     @testset "OrEvent" begin

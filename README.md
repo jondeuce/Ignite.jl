@@ -3,6 +3,7 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/Ignite.jl/dev/)
 [![Build Status](https://github.com/jondeuce/Ignite.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/jondeuce/Ignite.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![Coverage](https://codecov.io/gh/jondeuce/Ignite.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/jondeuce/Ignite.jl)
+[![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
 Welcome to `Ignite.jl`, a Julia port of the Python library [`ignite`](https://github.com/pytorch/ignite) for simplifying neural network training and validation loops using events and handlers.
 
@@ -119,13 +120,13 @@ end
 
 Custom events can be created to track different stages in the training process.
 
-For example, suppose we want to define events that fire at the start and finish of the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractPrimitiveEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
+For example, suppose we want to define events that fire at the start and finish of the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractLoopEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
 
 ````julia
-struct BACKWARD_STARTED <: AbstractPrimitiveEvent end
-struct BACKWARD_COMPLETED <: AbstractPrimitiveEvent end
-struct OPTIM_STEP_STARTED <: AbstractPrimitiveEvent end
-struct OPTIM_STEP_COMPLETED <: AbstractPrimitiveEvent end
+struct BACKWARD_STARTED <: AbstractLoopEvent end
+struct BACKWARD_COMPLETED <: AbstractLoopEvent end
+struct OPTIM_STEP_STARTED <: AbstractLoopEvent end
+struct OPTIM_STEP_COMPLETED <: AbstractLoopEvent end
 
 function train_step(engine, batch)
     x, y = batch

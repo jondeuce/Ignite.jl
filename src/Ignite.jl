@@ -9,10 +9,11 @@ using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
 using Parameters: @with_kw, @with_kw_noshow
 using TimerOutputs: TimerOutput, @timeit, print_timer, reset_timer!
 
-export AbstractEvent, AbstractPrimitiveEvent, AbstractPrimitiveErrorEvent
+export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent, AbstractErrorEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
 export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
-export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent, every_filter, once_filter, throttle_filter
+export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
+export filter_event, every_filter, once_filter, throttle_filter
 export add_event_handler!, fire_event!
 
 """
@@ -21,28 +22,42 @@ Abstract event type for construction compound events.
 abstract type AbstractEvent end
 
 """
-Basic events fired by the engine.
+Basic events which can trigger event handlers via [`fire_event!`](@ref).
 """
-abstract type AbstractPrimitiveEvent <: AbstractEvent end
+abstract type AbstractFiringEvent <: AbstractEvent end
 
 """
-Basic events triggered by errors.
+Basic events fired during the execution of [`Ignite.run!`](@ref).
+
+A default convenience constructor `(EVENT::Type{<:AbstractLoopEvent})(; kwargs...)` is provided to allow easy filtering of `AbstractLoopEvent`s.
+For example, `EPOCH_COMPLETED(every = 3)` will build a [`FilteredEvent`](@ref) which is triggered every third epoch.
+See [`filter_event`](@ref) for allowed keywords.
+
+By inheriting from `AbstractLoopEvent`, custom events will inherit these convenience constructors, too.
+If this is undesired, one can instead inherit from the supertype `AbstractFiringEvent`.
 """
-abstract type AbstractPrimitiveErrorEvent <: AbstractPrimitiveEvent end
+abstract type AbstractLoopEvent <: AbstractFiringEvent end
 
-struct STARTED <: AbstractPrimitiveEvent end
-struct EPOCH_STARTED <: AbstractPrimitiveEvent end
-struct ITERATION_STARTED <: AbstractPrimitiveEvent end
-struct GET_BATCH_STARTED <: AbstractPrimitiveEvent end
-struct GET_BATCH_COMPLETED <: AbstractPrimitiveEvent end
-struct ITERATION_COMPLETED <: AbstractPrimitiveEvent end
-struct EPOCH_COMPLETED <: AbstractPrimitiveEvent end
-struct COMPLETED <: AbstractPrimitiveEvent end
+(EVENT::Type{<:AbstractLoopEvent})(; event_filter = nothing, every = nothing, once = nothing) = filter_event(EVENT(); event_filter, every, once)
 
-struct INTERRUPT <: AbstractPrimitiveErrorEvent end
-struct EXCEPTION_RAISED <: AbstractPrimitiveErrorEvent end
-struct DATALOADER_STOP_ITERATION <: AbstractPrimitiveErrorEvent end
-struct TERMINATE <: AbstractPrimitiveErrorEvent end
+"""
+Basic events triggered by errors during the execution of [`Ignite.run!`](@ref).
+"""
+abstract type AbstractErrorEvent <: AbstractFiringEvent end
+
+struct STARTED <: AbstractLoopEvent end
+struct EPOCH_STARTED <: AbstractLoopEvent end
+struct ITERATION_STARTED <: AbstractLoopEvent end
+struct GET_BATCH_STARTED <: AbstractLoopEvent end
+struct GET_BATCH_COMPLETED <: AbstractLoopEvent end
+struct ITERATION_COMPLETED <: AbstractLoopEvent end
+struct EPOCH_COMPLETED <: AbstractLoopEvent end
+struct COMPLETED <: AbstractLoopEvent end
+
+struct INTERRUPT <: AbstractErrorEvent end
+struct EXCEPTION_RAISED <: AbstractErrorEvent end
+struct DATALOADER_STOP_ITERATION <: AbstractErrorEvent end
+struct TERMINATE <: AbstractErrorEvent end
 
 struct TerminationException <: Exception end
 struct DataLoaderEmptyException <: Exception end
@@ -76,8 +91,8 @@ Fields can be accessed and modified using `getproperty` and `setproperty!`.
 * `:batch`: The current batch passed to `process_function`.
 * `:output`: The output of `process_function` after a single iteration.
 * `:last_event`: The last event fired.
-* `:counters`: A `DefaultOrderedDict{AbstractPrimitiveEvent, Int, Int}(0)` with primitive event firing counters.
-* `:times`: An `OrderedDict{AbstractPrimitiveEvent, Float64}()` with total and per-epoch times fetched on primitive event keys.
+* `:counters`: A `DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0)` with primitive event firing counters.
+* `:times`: An `OrderedDict{AbstractFiringEvent, Float64}()` with total and per-epoch times fetched on primitive event keys.
 
 For example, `engine.state.iteration` can be used to access the current iteration.
 """
@@ -92,8 +107,8 @@ For example, `engine.state.iteration` can be used to access the current iteratio
             :batch        => nothing, # batch passed to `process_function`
             :output       => nothing, # output of `process_function` after a single iteration
             :last_event   => nothing, # last event fired
-            :counters     => DefaultOrderedDict{AbstractPrimitiveEvent, Int, Int}(0), # primitive event firing counters
-            :times        => OrderedDict{AbstractPrimitiveEvent, Float64}(), # dictionary with total and per-epoch times fetched on primitive event keys
+            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # primitive event firing counters
+            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # dictionary with total and per-epoch times fetched on primitive event keys
             # :seed       => nothing, # seed to set at each epoch
             # :metrics      => nothing, # dictionary with defined metrics
         ),
@@ -198,20 +213,62 @@ function initialize!(engine::Engine, dl::DataCycler; max_epochs::Int, epoch_leng
     return engine
 end
 
+"""
+    $(TYPEDSIGNATURES)
+
+Reset the engine state.
+"""
 function reset!(engine::Engine)
     engine.state = State()
     return engine
 end
 
+"""
+    $(TYPEDSIGNATURES)
+
+Terminate the engine.
+This sets `engine.should_terminate = true` and throws a `TerminationException`.
+"""
 function terminate!(engine::Engine)
     engine.should_terminate = true
     throw(TerminationException())
 end
 
-check_should_terminate!(engine::Engine) = engine.should_terminate && terminate!(engine)
+"""
+    $(TYPEDSIGNATURES)
+
+Terminate the engine if `engine.should_terminate == true`.
+See [`terminate!`](@ref).
+"""
+function maybe_terminate!(engine::Engine)
+    if engine.should_terminate
+        terminate!(engine)
+    end
+end
+
+"""
+    $(TYPEDSIGNATURES)
+
+Add event handler to `engine` which is fired when `event` is triggered.
+"""
+function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
+    push!(engine.event_handlers, EventHandler(event, handler))
+    return engine
+end
+
+"""
+`@on engine event handler` is syntax sugar for `add_event_handler!(handler, engine, event)`.
+"""
+macro on(engine, event, handler)
+    quote
+        add_event_handler!($(esc(handler)), $(esc(engine)), $(esc(event)))
+    end
+end
+
+#### Run engine
 
 function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
-    check_should_terminate!(engine)
+    maybe_terminate!(engine)
     to = engine.timer
 
     engine.state.times[GET_BATCH_STARTED()] = curr_time()
@@ -229,7 +286,7 @@ function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
 end
 
 function process_function!(engine::Engine, batch)
-    check_should_terminate!(engine)
+    maybe_terminate!(engine)
     to = engine.timer
 
     engine.state.times[ITERATION_STARTED()] = curr_time()
@@ -241,71 +298,6 @@ function process_function!(engine::Engine, batch)
     engine.state.times[ITERATION_COMPLETED()] = curr_time() - engine.state.times[ITERATION_STARTED()]
 
     return output
-end
-
-function fire_event!(engine::Engine, e::AbstractPrimitiveEvent)
-    !(e isa AbstractPrimitiveErrorEvent) && check_should_terminate!(engine)
-
-    engine.state.last_event = e
-    engine.state.counters[e] += 1
-    fire_event_handlers!(engine, e)
-
-    return engine
-end
-
-function fire_event_handlers!(engine::Engine, e::AbstractPrimitiveEvent)
-    if length(engine.event_handlers) <= 256
-        # Make the common case fast via loop unrolling
-        fire_event_handlers_generated!(engine, (engine.event_handlers...,), e)
-    else
-        # Fallback to a dynamic loop for large numbers of handlers
-        fire_event_handlers_loop!(engine, engine.event_handlers, e)
-    end
-end
-
-@generated function fire_event_handlers_generated!(engine::Engine, handlers::H, e::AbstractPrimitiveEvent) where {N, H <: Tuple{Vararg{EventHandler, N}}}
-    quote
-        Base.Cartesian.@nexprs $N i -> fire_event!(engine, handlers[i], e)
-    end
-end
-
-function fire_event_handlers_loop!(engine::Engine, handlers::AbstractVector{EventHandler}, e::AbstractPrimitiveEvent)
-    for handler in handlers
-        fire_event!(engine, handler, e)
-    end
-end
-
-#### EventHandler methods
-
-"""
-    $(TYPEDSIGNATURES)
-
-Execute `handler` if it is triggered by the primitive event `e`.
-"""
-function fire_event!(engine::Engine, handler::EventHandler, e::AbstractPrimitiveEvent)
-    if is_triggered_by(engine, handler.event, e)
-        handler.handler!(engine)
-    end
-    return engine
-end
-
-"""
-    $(TYPEDSIGNATURES)
-
-Add event handler to engine which is fired when `event` is triggered.
-"""
-function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
-    push!(engine.event_handlers, EventHandler(event, handler))
-    return engine
-end
-
-"""
-`@on engine event handler` is syntax sugar for `add_event_handler!(handler, engine, event)`.
-"""
-macro on(engine, event, handler)
-    quote
-        add_event_handler!($(esc(handler)), $(esc(engine)), $(esc(event)))
-    end
 end
 
 """
@@ -414,12 +406,63 @@ function run!(
     return engine
 end
 
+#### Event firing
+
+"""
+    $(TYPEDSIGNATURES)
+
+Execute all event handlers triggered by the primitive event `e`.
+"""
+function fire_event!(engine::Engine, e::AbstractFiringEvent)
+    !(e isa AbstractErrorEvent) && maybe_terminate!(engine)
+
+    engine.state.last_event = e
+    engine.state.counters[e] += 1
+    fire_event_handlers!(engine, e)
+
+    return engine
+end
+
+"""
+    $(TYPEDSIGNATURES)
+
+Execute `handler` if it is triggered by the primitive event `e`.
+"""
+function fire_event!(engine::Engine, handler::EventHandler, e::AbstractFiringEvent)
+    if is_triggered_by(engine, handler.event, e)
+        handler.handler!(engine)
+    end
+    return engine
+end
+
+function fire_event_handlers!(engine::Engine, e::AbstractFiringEvent)
+    if length(engine.event_handlers) <= 256
+        # Make the common case fast via loop unrolling
+        fire_event_handlers_generated!(engine, (engine.event_handlers...,), e)
+    else
+        # Fallback to a dynamic loop for large numbers of handlers
+        fire_event_handlers_loop!(engine, engine.event_handlers, e)
+    end
+end
+
+@generated function fire_event_handlers_generated!(engine::Engine, handlers::H, e::AbstractFiringEvent) where {N, H <: Tuple{Vararg{EventHandler, N}}}
+    quote
+        Base.Cartesian.@nexprs $N i -> fire_event!(engine, handlers[i], e)
+    end
+end
+
+function fire_event_handlers_loop!(engine::Engine, handlers::AbstractVector{EventHandler}, e::AbstractFiringEvent)
+    for handler in handlers
+        fire_event!(engine, handler, e)
+    end
+end
+
 #### Helpers
 
 @with_kw struct EveryFilter{T}
     every::T
 end
-function (f::EveryFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+function (f::EveryFilter)(engine::Engine, e::AbstractFiringEvent)
     count = engine.state.counters[e]
     return count > 0 && any(mod1.(count, f.every) .== f.every)
 end
@@ -427,7 +470,7 @@ end
 @with_kw struct OnceFilter{T}
     once::T
 end
-function (f::OnceFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+function (f::OnceFilter)(engine::Engine, e::AbstractFiringEvent)
     count = engine.state.counters[e]
     return count > 0 && any(count .== f.once)
 end
@@ -436,7 +479,7 @@ end
     throttle::Float64
     last_fire::Base.RefValue{Float64}
 end
-function (f::ThrottleFilter)(engine::Engine, e::AbstractPrimitiveEvent)
+function (f::ThrottleFilter)(engine::Engine, e::AbstractFiringEvent)
     t = curr_time()
     return t - f.last_fire[] >= f.throttle ? (f.last_fire[] = t; true) : false
 end
@@ -444,7 +487,7 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Creates a filter function for use in a `FilteredEvent` that returns `true` periodically depending on `every`:
+Creates an event filter function for use in a `FilteredEvent` that returns `true` periodically depending on `every`:
 * If `every = n::Int`, the filter will trigger every `n`th firing of the event.
 * If `every = Int[n₁, n₂, ...]`, the filter will trigger every `n₁`th firing, every `n₂`th firing, and so on.
 """
@@ -453,7 +496,7 @@ every_filter(every::Union{Int, <:AbstractVector{Int}}) = EveryFilter(every)
 """
     $(TYPEDSIGNATURES)
 
-Creates a filter function for use in a `FilteredEvent` that returns `true` at specific points depending on `once`:
+Creates an event filter function for use in a `FilteredEvent` that returns `true` at specific points depending on `once`:
 * If `once = n::Int`, the filter will trigger only on the `n`th firing of the event.
 * If `once = Int[n₁, n₂, ...]`, the filter will trigger only on the `n₁`th firing, the `n₂`th firing, and so on.
 """
@@ -462,7 +505,7 @@ once_filter(once::Union{Int, <:AbstractVector{Int}}) = OnceFilter(once)
 """
     $(TYPEDSIGNATURES)
 
-Creates a filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
+Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
 """
 throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(curr_time()))
 
@@ -476,20 +519,14 @@ curr_time() = time_ns() / 1e9 # nanosecond resolution
 
 #### Custom events
 
-function (::Type{EVENT})(; event_filter = nothing, every = nothing, once = nothing) where {EVENT <: AbstractPrimitiveEvent}
-    @assert sum(!isnothing, (event_filter, every, once)) == 1 "Exactly one of `event_filter`, `every`, `once` must be supplied"
-    filter = every !== nothing ? every_filter(every) : once !== nothing ? once_filter(once) : event_filter
-    return FilteredEvent(; event = EVENT(), filter = filter)
-end
-
-is_triggered_by(::Engine, e1::AbstractEvent, e2::AbstractPrimitiveEvent) = e1 == e2
+is_triggered_by(::Engine, e1::AbstractEvent, e2::AbstractFiringEvent) = e1 == e2
 
 """
     $(TYPEDEF)
 
-`FilteredEvent(event::E, filter::F = Returns(true))` wraps an `event` and a `filter` function.
+`FilteredEvent(event::E, event_filter::F)` wraps an `event` and a `event_filter` function.
 
-When a primitive event `e` is fired, if `filter(engine, e)` returns `true` then the filtered event will be fired too.
+When a primitive event `e` is fired, if `event_filter(engine, e)` returns `true` then the filtered event will be fired too.
 
 Fields: $(TYPEDFIELDS)
 """
@@ -497,11 +534,30 @@ Fields: $(TYPEDFIELDS)
     "The wrapped event that will be fired if the filter function returns true when applied to a primitive event."
     event::E
 
-    "The filter function `filter(engine::Engine, e::AbstractPrimitiveEvent)::Bool` returns true if the wrapped `event` should be fired."
-    filter::F = Returns(true)
+    "The filter function `(::Engine, ::AbstractFiringEvent) -> Bool` returns `true` if the filtered event should be fired."
+    event_filter::F
 end
 
-is_triggered_by(engine::Engine, e1::FilteredEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event, e2) && e1.filter(engine, e2)
+"""
+    $(TYPEDEF)
+
+Filter the input `event` to fire conditionally:
+
+Inputs:
+* `event::AbstractFiringEvent`: event to be filtered.
+* `event_filter::Any`: A event_filter function `(::Engine, ::AbstractFiringEvent) -> Bool` returning `true` if the filtered event should be fired.
+* `every::Union{Int, <:AbstractVector{Int}}`: the period(s) in which the filtered event should be fired; see [`every_filter`](@ref).
+* `once::Union{Int, <:AbstractVector{Int}}`: the point(s) at which the filtered event should be fired; see [`once_filter`](@ref).
+"""
+function filter_event(event::AbstractFiringEvent; event_filter = nothing, every = nothing, once = nothing)
+    @assert sum(!isnothing, (event_filter, every, once)) == 1 "Exactly one of `event_filter`, `every`, or `once` must be supplied."
+    if event_filter === nothing
+        event_filter = every !== nothing ? every_filter(every) : once_filter(once)
+    end
+    return FilteredEvent(event, event_filter)
+end
+
+is_triggered_by(engine::Engine, e1::FilteredEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event, e2) && e1.event_filter(engine, e2)
 
 """
     $(TYPEDEF)
@@ -519,7 +575,7 @@ Fields: $(TYPEDFIELDS)
 end
 Base.:|(event1::AbstractEvent, event2::AbstractEvent) = OrEvent(event1, event2)
 
-is_triggered_by(engine::Engine, e1::OrEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event1, e2) || is_triggered_by(engine, e1.event2, e2)
+is_triggered_by(engine::Engine, e1::OrEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event1, e2) || is_triggered_by(engine, e1.event2, e2)
 
 """
     $(TYPEDEF)
@@ -537,6 +593,6 @@ Fields: $(TYPEDFIELDS)
 end
 Base.:&(event1::AbstractEvent, event2::AbstractEvent) = AndEvent(event1, event2)
 
-is_triggered_by(engine::Engine, e1::AndEvent, e2::AbstractPrimitiveEvent) = is_triggered_by(engine, e1.event1, e2) && is_triggered_by(engine, e1.event2, e2)
+is_triggered_by(engine::Engine, e1::AndEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event1, e2) && is_triggered_by(engine, e1.event2, e2)
 
 end # module Ignite
