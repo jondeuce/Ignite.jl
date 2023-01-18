@@ -7,30 +7,30 @@
 
 Welcome to `Ignite.jl`, a Julia port of the Python library [`ignite`](https://github.com/pytorch/ignite) for simplifying neural network training and validation loops using events and handlers.
 
-`Ignite.jl` provides a simple yet flexible engine and event system, allowing for the easy composition of training pipelines with various events such as artifact saving, metric logging, and model validation. Event-based training abstracts away the training loop, replacing it with 1) a training engine which executes a single training step, 2) a data loader for the engine to iterate over, and 3) events and corresponding handlers which are attached to the engine, configured to fire at specific points during training.
+`Ignite.jl` provides a simple yet flexible engine and event system, allowing for the easy composition of training pipelines with various events such as artifact saving, metric logging, and model validation. Event-based training abstracts away the training loop, replacing it with:
+1. An *engine* which wraps a *process function* that consumes a single batch of data,
+2. An iterable data loader which produces said batches of data, and
+3. Events and corresponding event handlers which are attached to the engine, configured to fire at specific points during training.
 
-Event handlers much more flexibile compared to other approaches like callbacks: they can be any callable, multiple handlers can be attached to a single event, multiple events can trigger the same handler, and custom events can be defined to fire at user-specified points during training. This makes adding functionality to your training pipeline easy, minimizing the need to modify existing code.
+Event handlers are much more flexibile compared to other approaches like callbacks: handlers can be any callable; multiple handlers can be attached to a single event; multiple events can trigger the same handler; and custom events can be defined to fire at user-specified points during training. This makes adding functionality to your training pipeline easy, minimizing the need to modify existing code.
 
 ## Quick Start
 
-The example below demonstrates how to use `Ignite.jl` to train a simple neural network while keeping track of evaluation metrics and displaying them every 5 epochs. Key features to note:
-
-* The training step is factored out of the training loop: the `train_step` function takes a batch of training data and computes the loss, gradients, and updates the model parameters.
-* Events are flexibly added to the training and evaluation engines to customize training: the `evaluator` logs metrics, and the `trainer` runs the evaluator every 5 epochs.
-* Data loaders can be any iterable collection. Here we use a [`DataLoader`](https://juliaml.github.io/MLUtils.jl/stable/api/#MLUtils.DataLoader) from [`MLUtils.jl`](https://github.com/JuliaML/MLUtils.jl)
+The example below demonstrates how to use `Ignite.jl` to train a simple neural network. Key features to note:
+* The training step is factored out of the training loop: the `train_step` process function takes a batch of training data and computes the training loss, gradients, and updates the model parameters.
+* Data loaders can be any iterable collection. Here, we use a [`DataLoader`](https://juliaml.github.io/MLUtils.jl/stable/api/#MLUtils.DataLoader) from [`MLUtils.jl`](https://github.com/JuliaML/MLUtils.jl)
 
 ````julia
 using Ignite
 using Flux, Zygote, Optimisers, MLUtils # for training a neural network
-using OnlineStats: Mean, fit! # for tracking evaluation metrics
 
 # Build simple neural network and initialize Adam optimizer
 model = Chain(Dense(1 => 32, tanh), Dense(32 => 1))
 optim = Optimisers.setup(Optimisers.Adam(1f-3), model)
 
-# Creat mock data and data loaders
+# Create mock data and data loaders
 f(x) = 2x-x^3
-xtrain, xtest = randn(1, 10_000), randn(1, 100)
+xtrain, xtest = 2 * rand(1, 10_000) .- 1, reshape(range(-1, 1, length = 100), 1, :)
 ytrain, ytest = f.(xtrain), f.(xtest)
 train_data_loader = DataLoader((; x = xtrain, y = ytrain); batchsize = 64, shuffle = true, partial = false)
 eval_data_loader = DataLoader((; x = xtest, y = ytest); batchsize = 10, shuffle = false)
@@ -47,7 +47,23 @@ function train_step(engine, batch)
 end
 trainer = Engine(train_step)
 
-# Create evaluation engine using `do` syntax:
+# Start the training
+Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
+````
+
+### Periodically evaluate model
+
+The real power of `Ignite.jl` comes when adding *events* to our training engine.
+
+Let's evaluate our model after every 5th training epoch. This can be easily incorporated without needing to modify any of the above training code:
+1. Create an `evaluator` engine which consumes batches of evaluation data
+2. Add *event handlers* to the `evaluator` engine which accumulate a running average of evaluation metrics over batches of evaluation data; we use [`OnlineStats.jl`](https://github.com/joshday/OnlineStats.jl) to make this easy.
+3. Add an event handler to the `trainer` which runs the `evaluator` on the evaluation data loader every 5 training epochs.
+
+````julia
+using OnlineStats: Mean, fit! # for tracking evaluation metrics
+
+# Create an evaluation engine using `do` syntax:
 evaluator = Engine() do engine, batch
     x, y = batch
     ypred = model(x) # evaluate model on a single batch of validation data
@@ -55,30 +71,31 @@ evaluator = Engine() do engine, batch
 end
 
 # Add events to the evaluation engine to track metrics:
-#   - when `evaluator` starts, initialize the running mean
-#   - after each iteration, compute eval metrics from predictions and update the running average
 add_event_handler!(evaluator, STARTED()) do engine
-    engine.state.metrics = Dict("abs_err" => Mean()) # new fields can be dynamically added to `engine.state`
+    # When `evaluator` starts, initialize the running mean
+    engine.state.metrics = Dict("abs_err" => Mean()) # new fields can be added to `engine.state` dynamically
 end
+
 add_event_handler!(evaluator, ITERATION_COMPLETED()) do engine
+    # Each iteration, compute eval metrics from predictions
     o = engine.state.output
     m = engine.state.metrics["abs_err"]
     fit!(m, abs.(o["ytrue"] .- o["ypred"]) |> vec)
 end
 
-# Add an event to the training engine to run `evaluator` every 5 epochs:
+# Add an event to `trainer` which runs `evaluator` every 5 epochs:
 add_event_handler!(trainer, EPOCH_COMPLETED(every = 5)) do engine
     Ignite.run!(evaluator, eval_data_loader)
     @info "Evaluation metrics: abs_err = $(evaluator.state.metrics["abs_err"])"
 end
 
-# Start the training
-Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 1_000)
+# Run the trainer with periodic evaluation
+Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 ````
 
-### Periodically save model
+### Artifact saving
 
-Easily add custom functionality to your training process without modifying existing code by incorporating new events. For example, saving the current model and optimizer state to disk every 10 epochs using [`BSON.jl`](https://github.com/JuliaIO/BSON.jl):
+Logging artifacts can be easily added to the trainer, again without modifying the above code. For example, save the current model and optimizer state to disk every 10 epochs using [`BSON.jl`](https://github.com/JuliaIO/BSON.jl):
 
 ````julia
 using BSON: @save
@@ -98,15 +115,17 @@ Multiple event handlers can be added to the same event:
 add_event_handler!(trainer, COMPLETED()) do engine
     @info "Training is ended"
 end
-add_event_handler!(engine -> display(engine.state.times), trainer, COMPLETED())
+add_event_handler!(trainer, COMPLETED()) do engine
+    Ignite.print_timer(engine.timer)
+end
 ````
 
 ### Attach the same handler to multiple events
 
-The boolean operators `|` and `&` can be used to combine events:
+The boolean operators `|` and `&` can be used to combine events together:
 
 ````julia
-add_event_handler!(trainer, COMPLETED() | EPOCH_COMPLETED(every = 10)) do engine
+add_event_handler!(trainer, EPOCH_COMPLETED(every = 10) | COMPLETED()) do engine
     # Runs at the end of every 10th epoch, or when training is completed
 end
 
@@ -118,9 +137,9 @@ end
 
 ### Define custom events
 
-Custom events can be created to track different stages in the training process.
+Custom events can be created and fired at user-defined stages in the training process.
 
-For example, suppose we want to define events that fire at the start and finish of the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractLoopEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
+For example, suppose we want to define events that fire at the start and finish of both the backward pass and the optimizer step. All we need to do is define new event types that subtype `AbstractLoopEvent`, and then fire them at appropriate points in the `train_step` process function using `fire_event!`:
 
 ````julia
 struct BACKWARD_STARTED <: AbstractLoopEvent end
@@ -134,6 +153,7 @@ function train_step(engine, batch)
     # Compute the gradients of the loss with respect to the model
     fire_event!(engine, BACKWARD_STARTED())
     l, gs = Zygote.withgradient(m -> sum(abs2, m(x) .- y), model)
+    engine.state.gradients = gs # the engine state can be accessed by event handlers
     fire_event!(engine, BACKWARD_COMPLETED())
 
     # Update the model's parameters

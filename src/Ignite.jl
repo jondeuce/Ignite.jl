@@ -17,19 +17,25 @@ export filter_event, every_filter, once_filter, throttle_filter
 export add_event_handler!, fire_event!
 
 """
-Abstract event type for construction compound events.
+$(TYPEDEF)
+
+Abstract supertype for all events.
 """
 abstract type AbstractEvent end
 
 """
-Basic events which can trigger event handlers via [`fire_event!`](@ref).
+$(TYPEDEF)
+
+Abstract supertype for all events which can trigger event handlers via [`fire_event!`](@ref).
 """
 abstract type AbstractFiringEvent <: AbstractEvent end
 
 """
-Basic events fired during the execution of [`Ignite.run!`](@ref).
+$(TYPEDEF)
 
-A default convenience constructor `(EVENT::Type{<:AbstractLoopEvent})(; kwargs...)` is provided to allow easy filtering of `AbstractLoopEvent`s.
+Abstract supertype for events fired during the normal execution of [`Ignite.run!`](@ref).
+
+A default convenience constructor `(EVENT::Type{<:AbstractLoopEvent})(; kwargs...)` is provided to allow for easy filtering of `AbstractLoopEvent`s.
 For example, `EPOCH_COMPLETED(every = 3)` will build a [`FilteredEvent`](@ref) which is triggered every third epoch.
 See [`filter_event`](@ref) for allowed keywords.
 
@@ -41,7 +47,9 @@ abstract type AbstractLoopEvent <: AbstractFiringEvent end
 (EVENT::Type{<:AbstractLoopEvent})(; event_filter = nothing, every = nothing, once = nothing) = filter_event(EVENT(); event_filter, every, once)
 
 """
-Basic events triggered by errors during the execution of [`Ignite.run!`](@ref).
+$(TYPEDEF)
+
+Abstract supertype for events triggered by errors during the execution of [`Ignite.run!`](@ref).
 """
 abstract type AbstractErrorEvent <: AbstractFiringEvent end
 
@@ -63,9 +71,9 @@ struct TerminationException <: Exception end
 struct DataLoaderEmptyException <: Exception end
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
-`EventHandler(event::E, handler!::H)` wraps an `event` and fires the corresponding `handler!` when `event` is triggered.
+`EventHandler`s wrap an `event` and corresponding `handler!` which is executed when `event` is triggered by a call to [`fire_event!`](@ref).
 
 Fields: $(TYPEDFIELDS)
 """
@@ -78,10 +86,9 @@ Fields: $(TYPEDFIELDS)
 end
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
 Current state of the engine.
-Fields can be accessed and modified using `getproperty` and `setproperty!`.
 
 `State` is a light wrapper around a `DefaultOrderedDict{Symbol, Any, Nothing}` with the following keys:
 * `:iteration`: the current iteration, beginning with 1.
@@ -91,10 +98,11 @@ Fields can be accessed and modified using `getproperty` and `setproperty!`.
 * `:batch`: The current batch passed to `process_function`.
 * `:output`: The output of `process_function` after a single iteration.
 * `:last_event`: The last event fired.
-* `:counters`: A `DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0)` with primitive event firing counters.
-* `:times`: An `OrderedDict{AbstractFiringEvent, Float64}()` with total and per-epoch times fetched on primitive event keys.
+* `:counters`: A `DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0)` with firing event firing counters.
+* `:times`: An `OrderedDict{AbstractFiringEvent, Float64}()` with total and per-epoch times fetched on firing event keys.
 
-For example, `engine.state.iteration` can be used to access the current iteration.
+Fields can be accessed and modified using `getproperty` and `setproperty!`.
+For example, `engine.state.iteration` can be used to access the current iteration, and `engine.state.new_field = value` can be used to store `value` for later use e.g. by an event handler.
 """
 @with_kw_noshow struct State
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
@@ -107,10 +115,10 @@ For example, `engine.state.iteration` can be used to access the current iteratio
             :batch        => nothing, # batch passed to `process_function`
             :output       => nothing, # output of `process_function` after a single iteration
             :last_event   => nothing, # last event fired
-            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # primitive event firing counters
-            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # dictionary with total and per-epoch times fetched on primitive event keys
+            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event firing counters
+            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # dictionary with total and per-epoch times fetched on firing event keys
             # :seed       => nothing, # seed to set at each epoch
-            # :metrics      => nothing, # dictionary with defined metrics
+            # :metrics    => nothing, # dictionary with defined metrics
         ),
     )
 end
@@ -131,9 +139,10 @@ function Base.show(io::IO, ::MIME"text/plain", s::State)
 end
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
-`Engine(process_function::P; kwargs...)` to be run; see [`Ignite.run!`](@ref).
+An `Engine` struct to be run using [`Ignite.run!`](@ref).
+Can be constructed via `engine = Engine(process_function; kwargs...)`, where the process function takes two arguments: the parent `engine`, and a batch of data.
 
 Fields: $(TYPEDFIELDS)
 """
@@ -141,7 +150,7 @@ Fields: $(TYPEDFIELDS)
     "A function that processes a single batch of data and returns an output."
     process_function::P
 
-    "An iterable object that provides the data for the engine to process."
+    "An iterable that provides the data batches for the process function."
     dataloader::Any = nothing
 
     "An object that holds the current state of the engine."
@@ -226,8 +235,7 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Terminate the engine.
-This sets `engine.should_terminate = true` and throws a `TerminationException`.
+Terminate the engine by setting `engine.should_terminate = true` and throwing a `TerminationException`.
 """
 function terminate!(engine::Engine)
     engine.should_terminate = true
@@ -249,7 +257,7 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Add event handler to `engine` which is fired when `event` is triggered.
+Add an event handler to an engine which is fired when `event` is triggered.
 """
 function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
     push!(engine.event_handlers, EventHandler(event, handler))
@@ -305,25 +313,25 @@ end
 
 Run the `engine`.
 Data batches are retrieved by iterating `dataloader`.
-The data loader may be infinite; by default, it is wrapped in `Iterators.cycle` to restart if it empties.
+The data loader may be infinite; by default, it is restarted if it empties.
 
 Inputs:
 * `engine::Engine`: An instance of the `Engine` struct containing the `process_function` to run each iteration.
-* `dataloader`:  A data loader to iterate over.
+* `dataloader`: A data loader to iterate over.
 * `max_epochs::Int`: the number of epochs to run. Defaults to 1.
 * `epoch_length::Int`: the length of an epoch. If `nothing`, falls back to `length(dataloader)`.
 
 Conceptually, running the engine is roughly equivalent to the following:
 1. The engine state is initialized.
-2. The engine begins running for `max_epochs` epochs, or until the `should_terminate` flag is set to true.
-3. At the start of each epoch, `EPOCH_STARTED()` event is fired and time is recorded.
-4. An iteration loop is performed for `epoch_length` number of iterations, or until the `should_terminate` flag is set to true.
+2. The engine begins running for `max_epochs` epochs, or until `engine.should_terminate == true`.
+3. At the start of each epoch, `EPOCH_STARTED()` event is fired.
+4. An iteration loop is performed for `epoch_length` number of iterations, or until `engine.should_terminate == true`.
 5. At the start of each iteration, `ITERATION_STARTED()` event is fired, and a batch of data is loaded.
 6. The `process_function` is called on the loaded data batch.
 7. At the end of each iteration, `ITERATION_COMPLETED()` event is fired.
 8. At the end of each epoch, `EPOCH_COMPLETED()` event is fired.
 9. At the end of all the epochs, `COMPLETED()` event is fired.
-10. Finally, `TERMINATE()` event is fired if `should_terminate` flag is set to true.
+10. Finally, `TERMINATE()` event is fired if `engine.should_terminate == true`.
 """
 function run!(
         engine::Engine,
@@ -411,7 +419,7 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Execute all event handlers triggered by the primitive event `e`.
+Execute all event handlers triggered by the firing event `e`.
 """
 function fire_event!(engine::Engine, e::AbstractFiringEvent)
     !(e isa AbstractErrorEvent) && maybe_terminate!(engine)
@@ -426,7 +434,7 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Execute `handler` if it is triggered by the primitive event `e`.
+Execute `handler` if it is triggered by the firing event `e`.
 """
 function fire_event!(engine::Engine, handler::EventHandler, e::AbstractFiringEvent)
     if is_triggered_by(engine, handler.event, e)
@@ -522,16 +530,16 @@ curr_time() = time_ns() / 1e9 # nanosecond resolution
 is_triggered_by(::Engine, e1::AbstractEvent, e2::AbstractFiringEvent) = e1 == e2
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
 `FilteredEvent(event::E, event_filter::F)` wraps an `event` and a `event_filter` function.
 
-When a primitive event `e` is fired, if `event_filter(engine, e)` returns `true` then the filtered event will be fired too.
+When a firing event `e` is fired, if `event_filter(engine, e)` returns `true` then the filtered event will be fired too.
 
 Fields: $(TYPEDFIELDS)
 """
 @with_kw struct FilteredEvent{E <: AbstractEvent, F} <: AbstractEvent
-    "The wrapped event that will be fired if the filter function returns true when applied to a primitive event."
+    "The wrapped event that will be fired if the filter function returns true when applied to a firing event."
     event::E
 
     "The filter function `(::Engine, ::AbstractFiringEvent) -> Bool` returns `true` if the filtered event should be fired."
@@ -539,7 +547,7 @@ Fields: $(TYPEDFIELDS)
 end
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
 Filter the input `event` to fire conditionally:
 
@@ -560,9 +568,11 @@ end
 is_triggered_by(engine::Engine, e1::FilteredEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event, e2) && e1.event_filter(engine, e2)
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
-`OrEvent(event1::E1, event2::E2)` wraps two events and triggers if either of the wrapped events are triggered by a primitive event firing.
+`OrEvent(event1, event2)` wraps two events and triggers if either of the wrapped events are triggered by a firing event firing.
+
+`OrEvent`s can be constructed via the `|` operator: `event1 | event2`.
 
 Fields: $(TYPEDFIELDS)
 """
@@ -578,9 +588,11 @@ Base.:|(event1::AbstractEvent, event2::AbstractEvent) = OrEvent(event1, event2)
 is_triggered_by(engine::Engine, e1::OrEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event1, e2) || is_triggered_by(engine, e1.event2, e2)
 
 """
-    $(TYPEDEF)
+$(TYPEDEF)
 
-`AndEvent(event1::E1, event2::E2)` wraps two events and triggers if and only if both wrapped events are triggered by the same primitive event firing.
+`AndEvent(event1, event2)` wraps two events and triggers if and only if both wrapped events are triggered by the same firing event firing.
+
+`AndEvent`s can be constructed via the `&` operator: `event1 & event2`.
 
 Fields: $(TYPEDFIELDS)
 """
