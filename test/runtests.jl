@@ -69,24 +69,23 @@ using Logging: NullLogger
 
     @testset "throttle filter" begin
         engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
-        event_filter = throttle_filter(0.1)
-        @test !event_filter(engine, event)
-        sleep(0.051); @test !event_filter(engine, event)
-        sleep(0.051); @test event_filter(engine, event)
-        sleep(0.026); @test !event_filter(engine, event)
-        sleep(0.026); @test !event_filter(engine, event)
-        sleep(0.051); @test event_filter(engine, event)
+        event_filter = throttle_filter(1.0)
+        @test event_filter(engine, event) # first call is unthrottled
+        sleep(0.6); @test !event_filter(engine, event)
+        sleep(0.6); @test event_filter(engine, event) # throttle resets
+        sleep(0.3); @test !event_filter(engine, event)
+        sleep(0.3); @test !event_filter(engine, event)
+        sleep(0.6); @test event_filter(engine, event) # throttle resets
     end
 
     @testset "timeout filter" begin
         engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
-        event_filter = timeout_filter(0.1)
-        @test !event_filter(engine, event)
-        sleep(0.026); @test !event_filter(engine, event)
-        sleep(0.026); @test !event_filter(engine, event)
-        sleep(0.026); @test !event_filter(engine, event)
-        sleep(0.026); @test event_filter(engine, event)
-        sleep(0.026); @test event_filter(engine, event)
+        event_filter = timeout_filter(1.0)
+        t₀ = time()
+        while (Δt = time() - t₀) < 2.0
+            @test event_filter(engine, event) == (Δt >= 1.0)
+            sleep(0.3)
+        end
     end
 
     @testset "OrEvent" begin

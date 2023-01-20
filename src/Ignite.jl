@@ -524,7 +524,7 @@ once_filter(once::Union{Int, <:AbstractVector{Int}}) = OnceFilter(once)
 
 Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
 """
-throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(time()))
+throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(-Inf))
 
 """
     $(TYPEDSIGNATURES)
