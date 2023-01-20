@@ -7,13 +7,13 @@ using Logging: AbstractLogger, NullLogger, current_logger, global_logger, with_l
 using DataStructures: DefaultOrderedDict, OrderedDict
 using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
 using Parameters: @with_kw, @with_kw_noshow
-using TimerOutputs: TimerOutput, @timeit, print_timer, reset_timer!
+using TimerOutputs: TimerOutput, @timeit, get_defaulttimer, print_timer, reset_timer!
 
 export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent, AbstractErrorEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
 export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
-export filter_event, every_filter, once_filter, throttle_filter
+export filter_event, every_filter, once_filter, throttle_filter, timeout_filter
 export add_event_handler!, fire_event!
 
 """
@@ -281,7 +281,7 @@ function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
     maybe_terminate!(engine)
     to = engine.timer
 
-    engine.state.times[GET_BATCH_STARTED()] = curr_time()
+    engine.state.times[GET_BATCH_STARTED()] = time()
     @timeit to "Event: GET_BATCH_STARTED" fire_event!(engine, GET_BATCH_STARTED())
 
     @timeit to "Iterate data loader" begin
@@ -290,7 +290,7 @@ function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
     end
 
     @timeit to "Event: GET_BATCH_COMPLETED" fire_event!(engine, GET_BATCH_COMPLETED())
-    engine.state.times[GET_BATCH_COMPLETED()] = curr_time() - engine.state.times[GET_BATCH_STARTED()]
+    engine.state.times[GET_BATCH_COMPLETED()] = time() - engine.state.times[GET_BATCH_STARTED()]
 
     return batch, state
 end
@@ -299,13 +299,13 @@ function process_function!(engine::Engine, batch)
     maybe_terminate!(engine)
     to = engine.timer
 
-    engine.state.times[ITERATION_STARTED()] = curr_time()
+    engine.state.times[ITERATION_STARTED()] = time()
     @timeit to "Event: ITERATION_STARTED" fire_event!(engine, ITERATION_STARTED())
 
     @timeit to "Process function" output = engine.state.output = engine.process_function(engine, batch)
 
     @timeit to "Event: ITERATION_COMPLETED" fire_event!(engine, ITERATION_COMPLETED())
-    engine.state.times[ITERATION_COMPLETED()] = curr_time() - engine.state.times[ITERATION_STARTED()]
+    engine.state.times[ITERATION_COMPLETED()] = time() - engine.state.times[ITERATION_STARTED()]
 
     return output
 end
@@ -354,12 +354,12 @@ function run!(
 
             initialize!(engine, dl; max_epochs, epoch_length)
 
-            engine.state.times[STARTED()] = curr_time()
+            engine.state.times[STARTED()] = time()
             @timeit to "Event: STARTED" fire_event!(engine, STARTED())
 
             @timeit to "Epoch loop" while engine.state.epoch < max_epochs && !engine.should_terminate
                 engine.state.epoch += 1
-                engine.state.times[EPOCH_STARTED()] = curr_time()
+                engine.state.times[EPOCH_STARTED()] = time()
                 @timeit to "Event: EPOCH_STARTED" fire_event!(engine, EPOCH_STARTED())
 
                 epoch_iteration = 0
@@ -372,21 +372,20 @@ function run!(
                 end
 
                 @timeit to "Event: EPOCH_COMPLETED" fire_event!(engine, EPOCH_COMPLETED())
-                engine.state.times[EPOCH_COMPLETED()] = curr_time() - engine.state.times[EPOCH_STARTED()]
+                engine.state.times[EPOCH_COMPLETED()] = time() - engine.state.times[EPOCH_STARTED()]
 
                 hours, mins, secs = to_hours_mins_secs(engine.state.times[EPOCH_COMPLETED()])
                 @info "Epoch[$(engine.state.epoch)] Complete. Time taken: $(hours):$(mins):$(secs)"
             end
 
             @timeit to "Event: COMPLETED" fire_event!(engine, COMPLETED())
-            engine.state.times[COMPLETED()] = curr_time() - engine.state.times[STARTED()]
+            engine.state.times[COMPLETED()] = time() - engine.state.times[STARTED()]
 
             hours, mins, secs = to_hours_mins_secs(engine.state.times[COMPLETED()])
             @info "Engine run complete. Time taken: $(hours):$(mins):$(secs)"
 
         catch e
             engine.should_terminate = true
-            @error sprint(showerror, e, catch_backtrace())
 
             if e isa InterruptException
                 @info "User interrupt"
@@ -490,8 +489,16 @@ end
     last_fire::Base.RefValue{Float64}
 end
 function (f::ThrottleFilter)(engine::Engine, e::AbstractFiringEvent)
-    t = curr_time()
+    t = time()
     return t - f.last_fire[] >= f.throttle ? (f.last_fire[] = t; true) : false
+end
+
+@with_kw struct TimeoutFilter
+    timeout::Float64
+    start_time::Float64
+end
+function (f::TimeoutFilter)(engine::Engine, e::AbstractFiringEvent)
+    return time() - f.start_time >= f.timeout
 end
 
 """
@@ -517,15 +524,20 @@ once_filter(once::Union{Int, <:AbstractVector{Int}}) = OnceFilter(once)
 
 Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
 """
-throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(curr_time()))
+throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(time()))
+
+"""
+    $(TYPEDSIGNATURES)
+
+Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `timeout` seconds has passed since the filter function was created.
+"""
+timeout_filter(timeout::Real) = TimeoutFilter(timeout, time())
 
 function to_hours_mins_secs(time_taken)
     mins, secs = divrem(time_taken, 60.0)
     hours, mins = divrem(mins, 60.0)
     return map(x -> lpad(x, 2, '0'), (round(Int, hours), round(Int, mins), floor(Int, secs)))
 end
-
-curr_time() = time_ns() / 1e9 # nanosecond resolution
 
 #### Custom events
 

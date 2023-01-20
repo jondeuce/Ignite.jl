@@ -71,11 +71,22 @@ using Logging: NullLogger
         engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
         event_filter = throttle_filter(0.1)
         @test !event_filter(engine, event)
-        sleep(0.050); @test !event_filter(engine, event)
-        sleep(0.050); @test event_filter(engine, event)
-        sleep(0.025); @test !event_filter(engine, event)
-        sleep(0.025); @test !event_filter(engine, event)
-        sleep(0.050); @test event_filter(engine, event)
+        sleep(0.051); @test !event_filter(engine, event)
+        sleep(0.051); @test event_filter(engine, event)
+        sleep(0.026); @test !event_filter(engine, event)
+        sleep(0.026); @test !event_filter(engine, event)
+        sleep(0.051); @test event_filter(engine, event)
+    end
+
+    @testset "timeout filter" begin
+        engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
+        event_filter = timeout_filter(0.1)
+        @test !event_filter(engine, event)
+        sleep(0.026); @test !event_filter(engine, event)
+        sleep(0.026); @test !event_filter(engine, event)
+        sleep(0.026); @test !event_filter(engine, event)
+        sleep(0.026); @test event_filter(engine, event)
+        sleep(0.026); @test event_filter(engine, event)
     end
 
     @testset "OrEvent" begin

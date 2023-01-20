@@ -113,10 +113,10 @@ Multiple event handlers can be added to the same event:
 
 ````julia
 add_event_handler!(trainer, COMPLETED()) do engine
-    @info "Training is ended"
+    # Runs after training has completed
 end
 add_event_handler!(trainer, COMPLETED()) do engine
-    Ignite.print_timer(engine.timer)
+    # Also runs after training has completed, after the above function runs
 end
 ````
 

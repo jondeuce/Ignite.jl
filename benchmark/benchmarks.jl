@@ -77,7 +77,7 @@ function set_event_handlers!(engine, num_handlers::Int)
     while length(engine.event_handlers) < num_handlers
         for event in events
             add_event_handler!(engine, event) do engine
-                return Ignite.curr_time() # dummy work
+                return sqrt(time()) # dummy work
             end
             length(engine.event_handlers) >= num_handlers && break
         end
