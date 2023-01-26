@@ -138,7 +138,7 @@ using Logging: NullLogger
                 termination_fired[] = true
             end
 
-            @test_throws Ignite.TerminationException Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.TerminationException
 
             @test trainer.should_terminate
             @test trainer.state.iteration == epoch_length
@@ -186,7 +186,7 @@ using Logging: NullLogger
                 throw(InterruptException())
             end
 
-            @test_throws InterruptException Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa InterruptException
 
             @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), INTERRUPT(), TERMINATE()]
         end
@@ -196,7 +196,7 @@ using Logging: NullLogger
             trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
 
             # `length` fails for infinite data loader
-            @test_throws MethodError Ignite.run!(trainer, Iterators.cycle(dl))
+            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa MethodError
 
             dl = collect(dl)
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
@@ -211,7 +211,7 @@ using Logging: NullLogger
             trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
 
             # `length` fails for infinite data loader
-            @test_throws MethodError Ignite.run!(trainer, Iterators.cycle(dl))
+            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa MethodError
 
             dl = collect(dl)
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
@@ -231,7 +231,7 @@ using Logging: NullLogger
                 fired[] = true
             end
 
-            @test_throws Ignite.DataLoaderEmptyException Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.DataLoaderEmptyException
             @test fired[]
         end
 
@@ -251,6 +251,20 @@ using Logging: NullLogger
 
             Ignite.run!(trainer, dl)
             @test buffer == 1:num_handlers
+        end
+
+        @testset "additional handler args" begin
+            max_epochs, epoch_length = 7, 3
+            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
+
+            data = Ref(0)
+            add_event_handler!(trainer, ITERATION_COMPLETED(), data) do engine, _data
+                _data[] += engine.state.iteration
+            end
+            @test trainer.event_handlers[1].args[1] === data
+
+            Ignite.run!(trainer, dl)
+            @test data[] == sum(1:max_epochs * epoch_length)
         end
 
         @testset "custom events" begin

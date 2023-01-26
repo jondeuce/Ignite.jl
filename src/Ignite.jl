@@ -73,16 +73,24 @@ struct DataLoaderEmptyException <: Exception end
 """
 $(TYPEDEF)
 
-`EventHandler`s wrap an `event` and corresponding `handler!` which is executed when `event` is triggered by a call to [`fire_event!`](@ref).
+`EventHandler`s wrap an `event` and a corresponding `handler!`.
+The `handler!` is executed when `event` is triggered by a call to [`fire_event!`](@ref).
+The output from `handler!` is ignored.
+Additional `args` for `handler!` may be stored in `EventHandler` at construction; see [`add_event_handler!`](@ref).
+
+When `h::EventHandler` is triggered, the event handler is called as `h.handler!(engine::Engine, h.args...)`.
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw struct EventHandler{E <: AbstractEvent, H}
+@with_kw struct EventHandler{E <: AbstractEvent, H, A <: Tuple}
     "Event which triggers handler"
     event::E
 
     "Event handler which executes when triggered by `event`"
     handler!::H
+
+    "Additional arguments passed to the event handler"
+    args::A
 end
 
 """
@@ -152,9 +160,6 @@ Fields: $(TYPEDFIELDS)
     "A function that processes a single batch of data and returns an output."
     process_function::P
 
-    "An iterable that provides the data batches for the process function."
-    dataloader::Any = nothing
-
     "An object that holds the current state of the engine."
     state::State = State()
 
@@ -170,9 +175,13 @@ Fields: $(TYPEDFIELDS)
     "A flag that indicates whether the engine should stop running."
     should_terminate::Bool = false
 
+    "Exception thrown during training"
+    exception::Union{Nothing, Exception} = nothing
+
     # should_terminate_single_epoch::Bool = false
     # should_interrupt::Bool = false
 end
+
 Engine(process_function; kwargs...) = Engine(; process_function, kwargs...)
 
 #### Internal data loader cycler
@@ -211,9 +220,9 @@ end
 
 #### Engine methods
 
-function initialize!(engine::Engine, dl::DataCycler; max_epochs::Int, epoch_length::Int)
-    engine.dataloader = dl.iter
+function initialize!(engine::Engine; max_epochs::Int, epoch_length::Int)
     engine.should_terminate = false
+    engine.exception = nothing
     engine.state.iteration = 0
     engine.state.epoch = 0
     engine.state.max_epochs = max_epochs
@@ -260,19 +269,12 @@ end
     $(TYPEDSIGNATURES)
 
 Add an event handler to an engine which is fired when `event` is triggered.
-"""
-function add_event_handler!(handler, engine::Engine, event::AbstractEvent)
-    push!(engine.event_handlers, EventHandler(event, handler))
-    return engine
-end
 
+When fired, the event handler is called as `handler!(engine::Engine, handler_args...)`.
 """
-`@on engine event handler` is syntax sugar for `add_event_handler!(handler, engine, event)`.
-"""
-macro on(engine, event, handler)
-    quote
-        add_event_handler!($(esc(handler)), $(esc(engine)), $(esc(event)))
-    end
+function add_event_handler!(handler!, engine::Engine, event::AbstractEvent, handler_args...)
+    push!(engine.event_handlers, EventHandler(event, handler!, handler_args))
+    return engine
 end
 
 #### Run engine
@@ -352,7 +354,7 @@ function run!(
             batch_and_state = nothing
             (epoch_length === nothing) && (epoch_length = default_epoch_length(dl))
 
-            initialize!(engine, dl; max_epochs, epoch_length)
+            initialize!(engine; max_epochs, epoch_length)
 
             engine.state.times[STARTED()] = time()
             @timeit to "Event: STARTED" fire_event!(engine, STARTED())
@@ -386,6 +388,7 @@ function run!(
 
         catch e
             engine.should_terminate = true
+            engine.exception = e
 
             if e isa InterruptException
                 @info "User interrupt"
@@ -403,16 +406,14 @@ function run!(
                 @timeit to "Event: EXCEPTION_RAISED" fire_event!(engine, EXCEPTION_RAISED())
             end
 
-            throw(e)
+            @timeit to "Event: TERMINATE" fire_event!(engine, TERMINATE())
+
+            @error sprint(showerror, e, catch_backtrace())
 
         finally
-            if engine.should_terminate
-                @timeit to "Event: TERMINATE" fire_event!(engine, TERMINATE())
-            end
+            return engine
         end
     end
-
-    return engine
 end
 
 #### Event firing
@@ -432,18 +433,6 @@ function fire_event!(engine::Engine, e::AbstractFiringEvent)
     return engine
 end
 
-"""
-    $(TYPEDSIGNATURES)
-
-Execute `handler` if it is triggered by the firing event `e`.
-"""
-function fire_event!(engine::Engine, handler::EventHandler, e::AbstractFiringEvent)
-    if is_triggered_by(engine, handler.event, e)
-        handler.handler!(engine)
-    end
-    return engine
-end
-
 function fire_event_handlers!(engine::Engine, e::AbstractFiringEvent)
     if length(engine.event_handlers) <= 256
         # Make the common case fast via loop unrolling
@@ -456,15 +445,31 @@ end
 
 @generated function fire_event_handlers_generated!(engine::Engine, handlers::H, e::AbstractFiringEvent) where {N, H <: Tuple{Vararg{EventHandler, N}}}
     quote
-        Base.Cartesian.@nexprs $N i -> fire_event!(engine, handlers[i], e)
+        Base.Cartesian.@nexprs $N i -> fire_event_handler!(engine, handlers[i], e)
     end
 end
 
 function fire_event_handlers_loop!(engine::Engine, handlers::AbstractVector{EventHandler}, e::AbstractFiringEvent)
     for handler in handlers
-        fire_event!(engine, handler, e)
+        fire_event_handler!(engine, handler, e)
     end
 end
+
+"""
+    $(TYPEDSIGNATURES)
+
+Execute `event_handler!` if it is triggered by the firing event `e`.
+"""
+function fire_event_handler!(engine::Engine, event_handler!::EventHandler, e::AbstractFiringEvent)
+    if is_triggered_by(engine, event_handler!, e)
+        fire_event_handler!(engine, event_handler!)
+    end
+    return engine
+end
+
+is_triggered_by(engine::Engine, h::EventHandler, e) = is_triggered_by(engine, h.event, e)
+
+fire_event_handler!(engine::Engine, h::EventHandler) = h.handler!(engine, h.args...)
 
 #### Helpers
 
