@@ -190,23 +190,17 @@ struct DataCycler{D}
     iter::D
 end
 
-Base.iterate(dl::DataCycler) = iterate(dl.iter)
-
-function Base.iterate(dl::DataCycler, state)
-    batch_and_state = iterate(dl.iter, state)
-    batch_and_state === nothing && return iterate(dl)
+function Base.iterate(dl::DataCycler, ::Nothing)
+    batch_and_state = iterate(dl.iter)
+    (batch_and_state === nothing) && throw(DataLoaderEmptyException()) # empty iterator
     return batch_and_state
 end
+Base.iterate(dl::DataCycler) = iterate(dl, nothing)
 
-function next_batch_and_state(dl::DataCycler, batch_and_state)
-    if batch_and_state === nothing
-        batch_and_state = iterate(dl) # first iteration
-        batch_and_state === nothing && throw(DataLoaderEmptyException()) # empty iterator
-        return batch_and_state
-    else
-        _, state = batch_and_state
-        return iterate(dl, state)
-    end
+function Base.iterate(dl::DataCycler, iter_state)
+    batch_and_state = iterate(dl.iter, iter_state)
+    (batch_and_state === nothing) && return iterate(dl) # restart iterator
+    return batch_and_state
 end
 
 function default_epoch_length(dl::DataCycler)
@@ -279,7 +273,7 @@ end
 
 #### Run engine
 
-function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
+function load_batch!(engine::Engine, dl::DataCycler, iter_state)
     maybe_terminate!(engine)
     to = engine.timer
 
@@ -287,14 +281,14 @@ function load_batch!(engine::Engine, dl::DataCycler, batch_and_state)
     @timeit to "Event: GET_BATCH_STARTED" fire_event!(engine, GET_BATCH_STARTED())
 
     @timeit to "Iterate data loader" begin
-        batch, state = next_batch_and_state(dl, batch_and_state)
+        batch, iter_state = iterate(dl, iter_state)
         engine.state.batch = batch
     end
 
     @timeit to "Event: GET_BATCH_COMPLETED" fire_event!(engine, GET_BATCH_COMPLETED())
     engine.state.times[GET_BATCH_COMPLETED()] = time() - engine.state.times[GET_BATCH_STARTED()]
 
-    return batch, state
+    return batch, iter_state
 end
 
 function process_function!(engine::Engine, batch)
@@ -351,7 +345,7 @@ function run!(
     @timeit to "Ignite.run!" with_logger(logger) do
         try
             dl = DataCycler(dataloader)
-            batch_and_state = nothing
+            iter_state = nothing
             (epoch_length === nothing) && (epoch_length = default_epoch_length(dl))
 
             initialize!(engine; max_epochs, epoch_length)
@@ -366,7 +360,7 @@ function run!(
 
                 epoch_iteration = 0
                 @timeit to "Iteration loop" while epoch_iteration < epoch_length && !engine.should_terminate
-                    (batch, _) = batch_and_state = load_batch!(engine, dl, batch_and_state)
+                    batch, iter_state = load_batch!(engine, dl, iter_state)
 
                     epoch_iteration += 1
                     engine.state.iteration += 1
@@ -476,6 +470,7 @@ fire_event_handler!(engine::Engine, h::EventHandler) = h.handler!(engine, h.args
 @with_kw struct EveryFilter{T}
     every::T
 end
+
 function (f::EveryFilter)(engine::Engine, e::AbstractFiringEvent)
     count = engine.state.counters[e]
     return count > 0 && any(mod1.(count, f.every) .== f.every)
@@ -484,6 +479,7 @@ end
 @with_kw struct OnceFilter{T}
     once::T
 end
+
 function (f::OnceFilter)(engine::Engine, e::AbstractFiringEvent)
     count = engine.state.counters[e]
     return count > 0 && any(count .== f.once)
@@ -493,6 +489,7 @@ end
     throttle::Float64
     last_fire::Base.RefValue{Float64}
 end
+
 function (f::ThrottleFilter)(engine::Engine, e::AbstractFiringEvent)
     t = time()
     return t - f.last_fire[] >= f.throttle ? (f.last_fire[] = t; true) : false
@@ -502,6 +499,7 @@ end
     timeout::Float64
     start_time::Float64
 end
+
 function (f::TimeoutFilter)(engine::Engine, e::AbstractFiringEvent)
     return time() - f.start_time >= f.timeout
 end
@@ -602,6 +600,7 @@ Fields: $(TYPEDFIELDS)
     "The second wrapped event that will be checked if it should be fired."
     event2::E2
 end
+
 Base.:|(event1::AbstractEvent, event2::AbstractEvent) = OrEvent(event1, event2)
 
 is_triggered_by(engine::Engine, e1::OrEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event1, e2) || is_triggered_by(engine, e1.event2, e2)
@@ -622,6 +621,7 @@ Fields: $(TYPEDFIELDS)
     "The second wrapped event that will be considered for triggering."
     event2::E2
 end
+
 Base.:&(event1::AbstractEvent, event2::AbstractEvent) = AndEvent(event1, event2)
 
 is_triggered_by(engine::Engine, e1::AndEvent, e2::AbstractFiringEvent) = is_triggered_by(engine, e1.event1, e2) && is_triggered_by(engine, e1.event2, e2)
