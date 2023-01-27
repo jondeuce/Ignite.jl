@@ -2,6 +2,7 @@ using Ignite
 using Test
 
 using Aqua: test_all
+using DataStructures: OrderedDict
 using Logging: NullLogger
 
 @testset "Ignite.jl" begin
@@ -117,9 +118,25 @@ using Logging: NullLogger
     end
 
     @testset "custom show methods" begin
-        trainer, _ = dummy_trainer_and_loader()
-        @test sprint(show, trainer.state) == "Engine state"
-        @test startswith(sprint(show, MIME"text/plain"(), trainer.state), "Engine state:\n")
+        @test startswith(sprint(show, Engine(nothing)), "Engine")
+    end
+
+    @testset "State methods" begin
+        s = State()
+        s[:iteration] = 0
+        s.epoch = 0
+        s[:new_field_1] = :one
+        s.new_field_2 = "two"
+        @test s[:iteration] == s.iteration == 0
+        @test s[:epoch] == s.epoch == 0
+        @test s[:new_field_1] == s.new_field_1 == :one
+        @test s[:new_field_2] == s.new_field_2 == "two"
+        @test get!(s, :new_field_3, 3) == 3
+        @test s[:new_field_3] == s.new_field_3 == 3
+        @test get(s, :new_field_4, 4.0) == 4.0
+        @test !haskey(s, :new_field_4)
+        @test length(s) == length(State()) + 3 == 12
+        @test OrderedDict(k => v for (k, v) in s) == Ignite.state(s)
     end
 
     @testset "run!" begin

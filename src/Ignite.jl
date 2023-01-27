@@ -6,7 +6,6 @@ module Ignite
 using Logging: AbstractLogger, NullLogger, current_logger, global_logger, with_logger
 using DataStructures: DefaultOrderedDict, OrderedDict
 using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
-using Parameters: @with_kw, @with_kw_noshow
 using TimerOutputs: TimerOutput, @timeit, get_defaulttimer, print_timer, reset_timer!
 
 export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent, AbstractErrorEvent
@@ -82,7 +81,7 @@ When `h::EventHandler` is triggered, the event handler is called as `h.handler!(
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw struct EventHandler{E <: AbstractEvent, H, A <: Tuple}
+Base.@kwdef struct EventHandler{E <: AbstractEvent, H, A <: Tuple}
     "Event which triggers handler"
     event::E
 
@@ -112,7 +111,7 @@ Current state of the engine.
 Fields can be accessed and modified using `getproperty` and `setproperty!`.
 For example, `engine.state.iteration` can be used to access the current iteration, and `engine.state.new_field = value` can be used to store `value` for later use e.g. by an event handler.
 """
-@with_kw_noshow struct State <: AbstractDict{Symbol, Any}
+Base.@kwdef struct State <: AbstractDict{Symbol, Any}
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
         nothing,
         OrderedDict{Symbol, Any}(
@@ -136,17 +135,11 @@ Base.getindex(s::State, k::Symbol) = getindex(state(s), k)
 Base.setindex!(s::State, v, k::Symbol) = setindex!(state(s), v, k)
 Base.getproperty(s::State, k::Symbol) = s[k]
 Base.setproperty!(s::State, k::Symbol, v) = (s[k] = v)
+Base.get(s::State, k::Symbol, v) = get(state(s), k, v)
+Base.get!(s::State, k::Symbol, v) = get!(state(s), k, v)
 
-Base.show(io::IO, ::State) = print(io, "Engine state")
-
-function Base.show(io::IO, ::MIME"text/plain", s::State)
-    println(io, "Engine state:")
-    for (k, v) in state(s)
-        print(io, "  ", k, ": ")
-        (v isa Number || Base.issingletontype(v)) ? show(io, v) : print(io, summary(v))
-        println(io, "")
-    end
-end
+Base.iterate(s::State, args...) = iterate(state(s), args...)
+Base.length(s::State) = length(state(s))
 
 """
 $(TYPEDEF)
@@ -156,7 +149,7 @@ Can be constructed via `engine = Engine(process_function; kwargs...)`, where the
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw mutable struct Engine{P}
+Base.@kwdef mutable struct Engine{P}
     "A function that processes a single batch of data and returns an output."
     process_function::P
 
@@ -183,6 +176,9 @@ Fields: $(TYPEDFIELDS)
 end
 
 Engine(process_function; kwargs...) = Engine(; process_function, kwargs...)
+
+# Copied from Parameters.jl: https://github.com/mauro3/Parameters.jl/blob/e55b025b96275142ba52b2a725aedf460f26ff6f/src/Parameters.jl#L581
+Base.show(io::IO, engine::Engine) = dump(IOContext(io, :limit => true), engine; maxdepth = 1)
 
 #### Internal data loader cycler
 
@@ -298,7 +294,9 @@ function process_function!(engine::Engine, batch)
     engine.state.times[ITERATION_STARTED()] = time()
     @timeit to "Event: ITERATION_STARTED" fire_event!(engine, ITERATION_STARTED())
 
-    @timeit to "Process function" output = engine.state.output = engine.process_function(engine, batch)
+    @timeit to "Process function" begin
+        output = engine.state.output = engine.process_function(engine, batch)
+    end
 
     @timeit to "Event: ITERATION_COMPLETED" fire_event!(engine, ITERATION_COMPLETED())
     engine.state.times[ITERATION_COMPLETED()] = time() - engine.state.times[ITERATION_STARTED()]
@@ -467,7 +465,7 @@ fire_event_handler!(engine::Engine, h::EventHandler) = h.handler!(engine, h.args
 
 #### Helpers
 
-@with_kw struct EveryFilter{T}
+Base.@kwdef struct EveryFilter{T}
     every::T
 end
 
@@ -476,7 +474,7 @@ function (f::EveryFilter)(engine::Engine, e::AbstractFiringEvent)
     return count > 0 && any(mod1.(count, f.every) .== f.every)
 end
 
-@with_kw struct OnceFilter{T}
+Base.@kwdef struct OnceFilter{T}
     once::T
 end
 
@@ -485,7 +483,7 @@ function (f::OnceFilter)(engine::Engine, e::AbstractFiringEvent)
     return count > 0 && any(count .== f.once)
 end
 
-@with_kw struct ThrottleFilter
+Base.@kwdef struct ThrottleFilter
     throttle::Float64
     last_fire::Base.RefValue{Float64}
 end
@@ -495,7 +493,7 @@ function (f::ThrottleFilter)(engine::Engine, e::AbstractFiringEvent)
     return t - f.last_fire[] >= f.throttle ? (f.last_fire[] = t; true) : false
 end
 
-@with_kw struct TimeoutFilter
+Base.@kwdef struct TimeoutFilter
     timeout::Float64
     start_time::Float64
 end
@@ -555,7 +553,7 @@ When a firing event `e` is fired, if `event_filter(engine, e)` returns `true` th
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw struct FilteredEvent{E <: AbstractEvent, F} <: AbstractEvent
+Base.@kwdef struct FilteredEvent{E <: AbstractEvent, F} <: AbstractEvent
     "The wrapped event that will be fired if the filter function returns true when applied to a firing event."
     event::E
 
@@ -593,7 +591,7 @@ $(TYPEDEF)
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw struct OrEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
+Base.@kwdef struct OrEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
     "The first wrapped event that will be checked if it should be fired."
     event1::E1
 
@@ -614,7 +612,7 @@ $(TYPEDEF)
 
 Fields: $(TYPEDFIELDS)
 """
-@with_kw struct AndEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
+Base.@kwdef struct AndEvent{E1 <: AbstractEvent, E2 <: AbstractEvent} <: AbstractEvent
     "The first wrapped event that will be considered for triggering."
     event1::E1
 

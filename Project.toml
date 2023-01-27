@@ -7,14 +7,12 @@ version = "0.1.2"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
-Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
 [compat]
 Aqua = "0.6"
 DataStructures = "0.18"
 DocStringExtensions = "0.9"
-Parameters = "0.12"
 TimerOutputs = "0.5"
 julia = "1"
 
