@@ -6,9 +6,17 @@ using DataStructures: OrderedDict
 using Logging: NullLogger
 
 @testset "Ignite.jl" begin
+    function dummy_process_function(engine, batch)
+        engine.state.batch = batch
+        return Dict("loss" => sum(map(sum, batch)))
+    end
+
+    function dummy_engine(f = dummy_process_function; logger = NullLogger(), kwargs...)
+        Engine(f; kwargs..., logger)
+    end
+
     function dummy_trainer_and_loader(; max_epochs = 10, epoch_length = 10)
-        process_function = (_engine, _batch) -> Dict{String, Any}("loss" => sum(map(sum, _batch)))
-        engine = Engine(process_function; logger = NullLogger())
+        engine = dummy_engine()
         dataloader = (rand(3) for _ in 1:max_epochs * epoch_length)
         return engine, dataloader
     end
@@ -20,7 +28,7 @@ using Logging: NullLogger
 
     @testset "EPOCH_STARTED" begin
         @testset "every <Int>" begin
-            trainer, _ = dummy_trainer_and_loader()
+            trainer = dummy_engine()
             event = EPOCH_STARTED(; every = 2)
             for i in 1:5
                 @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
@@ -31,7 +39,7 @@ using Logging: NullLogger
         end
 
         @testset "every <Int list>" begin
-            trainer, _ = dummy_trainer_and_loader()
+            trainer = dummy_engine()
             every = [2, 5, 7]
             event = EPOCH_STARTED(; every = every)
             for i in 1:25
@@ -43,7 +51,7 @@ using Logging: NullLogger
         end
 
         @testset "once <Int list>" begin
-            trainer, _ = dummy_trainer_and_loader()
+            trainer = dummy_engine()
             once = [2, 5, 7]
             event = EPOCH_STARTED(; once = once)
             for i in 1:25
@@ -57,7 +65,7 @@ using Logging: NullLogger
 
     @testset "ITERATION_COMPLETED" begin
         @testset "once <Int>" begin
-            trainer, _ = dummy_trainer_and_loader()
+            trainer = dummy_engine()
             event = ITERATION_COMPLETED(; once = 4)
             for i in 1:7
                 @test !fire_and_check_triggered(trainer, event, EPOCH_STARTED())
@@ -69,7 +77,7 @@ using Logging: NullLogger
     end
 
     @testset "throttle filter" begin
-        engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
+        engine, event = dummy_engine(), EPOCH_COMPLETED() # dummy arguments
         event_filter = throttle_filter(1.0)
         @test event_filter(engine, event) # first call is unthrottled
         sleep(0.6); @test !event_filter(engine, event)
@@ -80,7 +88,7 @@ using Logging: NullLogger
     end
 
     @testset "timeout filter" begin
-        engine, event = Engine(nothing), EPOCH_COMPLETED() # dummy arguments
+        engine, event = dummy_engine(), EPOCH_COMPLETED() # dummy arguments
         event_filter = timeout_filter(1.0)
         t₀ = time()
         while (Δt = time() - t₀) < 2.0
@@ -90,7 +98,7 @@ using Logging: NullLogger
     end
 
     @testset "OrEvent" begin
-        trainer, _ = dummy_trainer_and_loader()
+        trainer = dummy_engine()
         event_filter = (_engine, _event) -> _engine.state.new_field !== nothing
         event = EPOCH_COMPLETED(; every = 3) | EPOCH_COMPLETED(; event_filter)
         @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
@@ -105,7 +113,7 @@ using Logging: NullLogger
     end
 
     @testset "AndEvent" begin
-        trainer, _ = dummy_trainer_and_loader()
+        trainer = dummy_engine()
         event_filter = (_engine, _event) -> _engine.state.new_field !== nothing
         event = EPOCH_COMPLETED(; every = 3) & EPOCH_COMPLETED(; event_filter)
         @test !fire_and_check_triggered(trainer, event, EPOCH_COMPLETED())
@@ -118,7 +126,7 @@ using Logging: NullLogger
     end
 
     @testset "custom show methods" begin
-        @test startswith(sprint(show, Engine(nothing)), "Engine")
+        @test startswith(sprint(show, dummy_engine()), "Engine")
     end
 
     @testset "State methods" begin
@@ -135,7 +143,7 @@ using Logging: NullLogger
         @test s[:new_field_3] == s.new_field_3 == 3
         @test get(s, :new_field_4, 4.0) == 4.0
         @test !haskey(s, :new_field_4)
-        @test length(s) == length(State()) + 3 == 12
+        @test length(s) == length(State()) + 3 == 11
         @test OrderedDict(k => v for (k, v) in s) == Ignite.state(s)
     end
 
@@ -208,24 +216,10 @@ using Logging: NullLogger
             @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), INTERRUPT(), TERMINATE()]
         end
 
-        @testset "user exception" begin
-            max_epochs, epoch_length = 7, 3
-            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
-
-            # `length` fails for infinite data loader
-            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa MethodError
-
-            dl = collect(dl)
-            add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
-                @test engine.state.batch == dl[mod1(engine.state.iteration, length(dl))]
-            end
-
-            Ignite.run!(trainer, dl)
-        end
-
         @testset "default epoch length" begin
             max_epochs, epoch_length = 7, 3
-            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
+            trainer = dummy_engine()
+            dl = 1:5
 
             # `length` fails for infinite data loader
             @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa MethodError
@@ -240,7 +234,7 @@ using Logging: NullLogger
 
         @testset "empty data loader" begin
             max_epochs, epoch_length = 7, 3
-            trainer, _ = dummy_trainer_and_loader(; max_epochs, epoch_length)
+            trainer = dummy_engine()
             dl = []
 
             fired = Ref(false)
@@ -291,7 +285,7 @@ using Logging: NullLogger
             @test NEW_LOOP_EVENT(every = 3) isa FilteredEvent
             @test_throws MethodError NEW_FIRING_EVENT(every = 3)
 
-            trainer = Engine(logger = NullLogger()) do engine, batch
+            trainer = dummy_engine() do engine, batch
                 fire_event!(engine, NEW_LOOP_EVENT())
                 fire_event!(engine, NEW_FIRING_EVENT())
                 return nothing

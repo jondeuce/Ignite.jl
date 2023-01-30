@@ -102,7 +102,6 @@ Current state of the engine.
 * `:epoch`: the current epoch, beginning with 1.
 * `:max_epochs`: The number of epochs to run.
 * `:epoch_length`: The number of batches processed per epoch.
-* `:batch`: The current batch passed to `process_function`.
 * `:output`: The output of `process_function` after a single iteration.
 * `:last_event`: The last event fired.
 * `:counters`: A `DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0)` with firing event firing counters.
@@ -119,7 +118,6 @@ Base.@kwdef struct State <: AbstractDict{Symbol, Any}
             :epoch        => nothing, # 1-based, the first epoch is 1
             :max_epochs   => nothing, # number of epochs to run
             :epoch_length => nothing, # number of batches processed per epoch
-            :batch        => nothing, # most recent batch passed to `process_function`
             :output       => nothing, # most recent output of `process_function`
             :last_event   => nothing, # most recent event fired
             :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event counters
@@ -276,10 +274,7 @@ function load_batch!(engine::Engine, dl::DataCycler, iter_state)
     engine.state.times[GET_BATCH_STARTED()] = time()
     @timeit to "Event: GET_BATCH_STARTED" fire_event!(engine, GET_BATCH_STARTED())
 
-    @timeit to "Iterate data loader" begin
-        batch, iter_state = iterate(dl, iter_state)
-        engine.state.batch = batch
-    end
+    @timeit to "Iterate data loader" batch, iter_state = iterate(dl, iter_state)
 
     @timeit to "Event: GET_BATCH_COMPLETED" fire_event!(engine, GET_BATCH_COMPLETED())
     engine.state.times[GET_BATCH_COMPLETED()] = time() - engine.state.times[GET_BATCH_STARTED()]
@@ -294,9 +289,7 @@ function process_function!(engine::Engine, batch)
     engine.state.times[ITERATION_STARTED()] = time()
     @timeit to "Event: ITERATION_STARTED" fire_event!(engine, ITERATION_STARTED())
 
-    @timeit to "Process function" begin
-        output = engine.state.output = engine.process_function(engine, batch)
-    end
+    @timeit to "Process function" output = engine.state.output = engine.process_function(engine, batch)
 
     @timeit to "Event: ITERATION_COMPLETED" fire_event!(engine, ITERATION_COMPLETED())
     engine.state.times[ITERATION_COMPLETED()] = time() - engine.state.times[ITERATION_STARTED()]
