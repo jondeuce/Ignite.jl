@@ -15,8 +15,8 @@ using Logging: NullLogger
         Engine(f; kwargs..., logger)
     end
 
-    function dummy_trainer_and_loader(; max_epochs = 10, epoch_length = 10)
-        engine = dummy_engine()
+    function dummy_trainer_and_loader(args...; max_epochs = 10, epoch_length = 10, kwargs...)
+        engine = dummy_engine(args...; kwargs...)
         dataloader = (rand(3) for _ in 1:max_epochs * epoch_length)
         return engine, dataloader
     end
@@ -152,12 +152,14 @@ using Logging: NullLogger
         @test_throws MethodError length(dl)
         @test Ignite.default_epoch_length(dl) == 5
         @test Base.IteratorSize(dl) == Base.IsInfinite()
+        @test Base.IteratorEltype(dl) == Base.HasEltype()
         @test Base.eltype(dl) == Int
 
         dl = Ignite.DataCycler(Iterators.cycle(1.0:5.0))
         @test_throws MethodError length(dl)
         @test_throws Ignite.DataLoaderUnknownLengthException Ignite.default_epoch_length(dl)
         @test Base.IteratorSize(dl) == Base.IsInfinite()
+        @test Base.IteratorEltype(dl) == Base.HasEltype()
         @test Base.eltype(dl) == Float64
     end
 
@@ -172,9 +174,8 @@ using Logging: NullLogger
                 engine.should_terminate = true
             end
 
-            termination_fired = Ref(false)
             add_event_handler!(trainer, TERMINATE()) do engine
-                termination_fired[] = true
+                engine.state.terminate_event_fired = true
             end
 
             @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.TerminationException
@@ -182,7 +183,7 @@ using Logging: NullLogger
             @test trainer.should_terminate
             @test trainer.state.iteration == epoch_length
             @test trainer.state.epoch == 1
-            @test termination_fired[]
+            @test trainer.state.terminate_event_fired == true
         end
 
         @testset "all default events" begin
@@ -251,13 +252,26 @@ using Logging: NullLogger
             trainer = dummy_engine()
             dl = []
 
-            fired = Ref(false)
             add_event_handler!(trainer, DATALOADER_STOP_ITERATION()) do engine
-                fired[] = true
+                engine.state.dataloader_stop_event_fired = true
             end
 
             @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.DataLoaderEmptyException
-            @test fired[]
+            @test trainer.state.dataloader_stop_event_fired == true
+        end
+
+        @testset "exception raised" begin
+            max_epochs, epoch_length = 7, 3
+            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length) do engine, batch
+                return engine.state.iteration >= 10 ? x : nothing # x is undefined
+            end
+
+            add_event_handler!(trainer, EXCEPTION_RAISED()) do engine
+                engine.state.exception_raised_event_fired = true
+            end
+
+            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa UndefVarError
+            @test trainer.state.exception_raised_event_fired == true
         end
 
         @testset "many handlers" begin
