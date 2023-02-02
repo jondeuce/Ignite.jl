@@ -68,6 +68,7 @@ struct TERMINATE <: AbstractErrorEvent end
 
 struct TerminationException <: Exception end
 struct DataLoaderEmptyException <: Exception end
+struct DataLoaderUnknownLengthException <: Exception end
 
 """
 $(TYPEDEF)
@@ -197,14 +198,13 @@ function Base.iterate(dl::DataCycler, iter_state)
     return batch_and_state
 end
 
-function default_epoch_length(dl::DataCycler)
-    try
-        return length(dl.iter)
-    catch e
-        @error "`length` is not defined for data loader; must set `epoch_length` explicitly"
-        throw(e)
-    end
-end
+Base.IteratorSize(::DataCycler) = Base.IsInfinite()
+Base.IteratorEltype(dl::DataCycler) = Base.IteratorEltype(dl.iter)
+Base.eltype(dl::DataCycler) = Base.eltype(dl.iter)
+
+default_epoch_length(dl::DataCycler) = default_epoch_length(dl, Base.IteratorSize(dl.iter))
+default_epoch_length(dl::DataCycler, ::Union{Base.HasLength, Base.HasShape}) = length(dl.iter)
+default_epoch_length(::DataCycler, ::Base.IteratorSize) = throw(DataLoaderUnknownLengthException())
 
 #### Engine methods
 
@@ -385,6 +385,9 @@ function run!(
             elseif e isa DataLoaderEmptyException
                 @error "Restarting data loader failed: `iterate(dataloader)` returned `nothing`"
                 @timeit to "Event: DATALOADER_STOP_ITERATION" fire_event!(engine, DATALOADER_STOP_ITERATION())
+
+            elseif e isa DataLoaderUnknownLengthException
+                @error "Length of data loader iterator is not known; must set `epoch_length` explicitly"
 
             else
                 @error "Exception raised during training"

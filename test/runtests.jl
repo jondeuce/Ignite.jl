@@ -147,6 +147,20 @@ using Logging: NullLogger
         @test OrderedDict(k => v for (k, v) in s) == Ignite.state(s)
     end
 
+    @testset "DataCycler" begin
+        dl = Ignite.DataCycler(1:5)
+        @test_throws MethodError length(dl)
+        @test Ignite.default_epoch_length(dl) == 5
+        @test Base.IteratorSize(dl) == Base.IsInfinite()
+        @test Base.eltype(dl) == Int
+
+        dl = Ignite.DataCycler(Iterators.cycle(1.0:5.0))
+        @test_throws MethodError length(dl)
+        @test_throws Ignite.DataLoaderUnknownLengthException Ignite.default_epoch_length(dl)
+        @test Base.IteratorSize(dl) == Base.IsInfinite()
+        @test Base.eltype(dl) == Float64
+    end
+
     @testset "run!" begin
         @testset "early termination" begin
             max_epochs, epoch_length = 3, 5
@@ -222,7 +236,7 @@ using Logging: NullLogger
             dl = 1:5
 
             # `length` fails for infinite data loader
-            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa MethodError
+            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa Ignite.DataLoaderUnknownLengthException
 
             dl = collect(dl)
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
