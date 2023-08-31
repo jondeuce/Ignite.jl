@@ -6,7 +6,7 @@ module Ignite
 using Logging: AbstractLogger, NullLogger, current_logger, global_logger, with_logger
 using DataStructures: DefaultOrderedDict, OrderedDict
 using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
-using TimerOutputs: TimerOutput, @timeit, get_defaulttimer, print_timer, reset_timer!
+using TimerOutputs: TimerOutput, @timeit, print_timer, reset_timer!
 
 export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent, AbstractErrorEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
@@ -372,6 +372,7 @@ function run!(
             @info "Engine run complete. Time taken: $(hours):$(mins):$(secs)"
 
         catch e
+            user_terminated = engine.should_terminate
             engine.should_terminate = true
             engine.exception = e
 
@@ -380,7 +381,7 @@ function run!(
                 @timeit to "Event: INTERRUPT" fire_event!(engine, INTERRUPT())
 
             elseif e isa TerminationException
-                @warn "Termination event triggered"
+                @info "Termination event triggered"
 
             elseif e isa DataLoaderEmptyException
                 @error "Restarting data loader failed: `iterate(dataloader)` returned `nothing`"
@@ -396,7 +397,9 @@ function run!(
 
             @timeit to "Event: TERMINATE" fire_event!(engine, TERMINATE())
 
-            @error sprint(showerror, e, catch_backtrace())
+            if !user_terminated
+                @error sprint(showerror, e, catch_backtrace())
+            end
 
         finally
             return engine

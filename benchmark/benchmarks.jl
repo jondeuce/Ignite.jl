@@ -9,7 +9,7 @@ using BenchmarkTools
 function sleep_expensive(dt)
     t = time_ns()
     while time_ns() - t < 1e9 * dt
-        # More accurate than `sleep(dt)`, but is blocking and simulates a workload
+        # More accurate than `sleep(dt)` and is blocking, simulating a workload
     end
     return nothing
 end

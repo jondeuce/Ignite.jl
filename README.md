@@ -30,7 +30,7 @@ optim = Optimisers.setup(Optimisers.Adam(1f-3), model)
 
 # Create mock data and data loaders
 f(x) = 2x-x^3
-xtrain, xtest = 2 * rand(1, 10_000) .- 1, reshape(range(-1, 1, length = 100), 1, :)
+xtrain, xtest = 2 * rand(Float32, 1, 10_000) .- 1, collect(reshape(range(-1f0, 1f0, length = 100), 1, :))
 ytrain, ytest = f.(xtrain), f.(xtest)
 train_data_loader = DataLoader((; x = xtrain, y = ytrain); batchsize = 64, shuffle = true, partial = false)
 eval_data_loader = DataLoader((; x = xtest, y = ytest); batchsize = 10, shuffle = false)
@@ -53,7 +53,7 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
 ### Periodically evaluate model
 
-The real power of `Ignite.jl` comes when adding *events* to our training engine.
+The real power of `Ignite.jl` comes when adding *event handlers* to our training engine.
 
 Let's evaluate our model after every 5th training epoch. This can be easily incorporated without needing to modify any of the above training code:
 1. Create an `evaluator` engine which consumes batches of evaluation data
@@ -61,7 +61,7 @@ Let's evaluate our model after every 5th training epoch. This can be easily inco
 3. Add an event handler to the `trainer` which runs the `evaluator` on the evaluation data loader every 5 training epochs.
 
 ````julia
-using OnlineStats: Mean, fit! # for tracking evaluation metrics
+using OnlineStats: Mean, fit!, value # for tracking evaluation metrics
 
 # Create an evaluation engine using `do` syntax:
 evaluator = Engine() do engine, batch
@@ -70,7 +70,7 @@ evaluator = Engine() do engine, batch
     return Dict("ytrue" => y, "ypred" => ypred) # result is stored in `evaluator.state.output`
 end
 
-# Add events to the evaluation engine to track metrics:
+# Add event handlers to the evaluation engine to track metrics:
 add_event_handler!(evaluator, STARTED()) do engine
     # When `evaluator` starts, initialize the running mean
     engine.state.metrics = Dict("abs_err" => Mean()) # new fields can be added to `engine.state` dynamically
@@ -83,7 +83,7 @@ add_event_handler!(evaluator, ITERATION_COMPLETED()) do engine
     fit!(m, abs.(o["ytrue"] .- o["ypred"]) |> vec)
 end
 
-# Add an event to `trainer` which runs `evaluator` every 5 epochs:
+# Add an event handler to `trainer` which runs `evaluator` every 5 epochs:
 add_event_handler!(trainer, EPOCH_COMPLETED(every = 5)) do engine
     Ignite.run!(evaluator, eval_data_loader)
     @info "Evaluation metrics: abs_err = $(evaluator.state.metrics["abs_err"])"
@@ -92,6 +92,36 @@ end
 # Run the trainer with periodic evaluation
 Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 ````
+
+### Early stopping
+
+To implement early stopping, we can add an event handler to `trainer` which checks the evaluation metrics and terminates `trainer` if the metrics fail to improve. To do so, we first define a training termination trigger using [`Flux.early_stopping`](http://fluxml.ai/Flux.jl/stable/training/callbacks/#Flux.early_stopping):
+
+````julia
+# Callback which returns `true` if the eval loss fails to decrease by
+# at least `min_dist` for two consecutive evaluations
+early_stop_trigger = Flux.early_stopping(2; init_score = Inf32, min_dist = 5f-3) do
+    return value(evaluator.state.metrics["abs_err"])
+end
+````
+
+Next, add an event handler to `trainer` which checks the early stopping trigger and terminates training via `Ignite.terminate!` if the trigger returns `true`:
+
+````julia
+# This handler must fire every 5th epoch, the same as the evaluation event handler,
+# to ensure new evaluation metrics are available
+add_event_handler!(trainer, EPOCH_COMPLETED(every = 5)) do engine
+    if early_stop_trigger()
+        @info "Stopping early"
+        Ignite.terminate!(trainer)
+    end
+end
+
+# Run the trainer with periodic evaluation and early stopping
+Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
+````
+
+Note: instead of adding a new event, the evaluation event handler from the previous section could have been modified to check `early_stop_trigger()` immediately after `evaluator` is run.
 
 ### Artifact saving
 

@@ -2,4 +2,3 @@
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Ignite = "1a1b1a28-7f47-4b26-86ef-080b8200110c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-ProfileView = "c46f51b8-102a-5cf2-8d2c-8597cb0e0da7"
