@@ -97,8 +97,8 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
 There are several ways to stop a training run before it has completed:
 1. Throw an exception as usual. This will immediately stop training. An `EXCEPTION_RAISED()` event will be subsequently be fired.
-2. Similarly, training may be interrupted by a keyboard interrupt (i.e. throwing an `InterruptException`). Training will halt, and an `INTERRUPT()` event will be fired.
-3. Training can be gracefully terminated via [`Ignite.terminate!(trainer)`](https://jondeuce.github.io/Ignite.jl/dev/#Ignite.terminate!-Tuple{Engine}), or equivalently, `trainer.should_terminate = true`. This will allow the current iteration will finish, but no further iterations will begin. Then, a `TERMINATE()` event will be fired followed by a `COMPLETED()` event.
+2. Similarly, use a terminal interrupt (CTRL+C, i.e. throw an `InterruptException`). Training will halt, and an `INTERRUPT()` event will be fired.
+3. Gracefully terminate via [`Ignite.terminate!(trainer)`](https://jondeuce.github.io/Ignite.jl/dev/#Ignite.terminate!-Tuple{Engine}), or equivalently, `trainer.should_terminate = true`. This will allow the current iteration to finish, but no further iterations will begin. Then, a `TERMINATE()` event will be fired followed by a `COMPLETED()` event.
 
 ### Early stopping
 
