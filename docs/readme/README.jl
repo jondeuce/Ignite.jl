@@ -89,9 +89,16 @@ end
 ## Run the trainer with periodic evaluation
 Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
+# ### Terminating a run
+
+# There are several ways to stop a training run before it has completed:
+# 1. Throw an exception as usual. This will immediately stop training. An `EXCEPTION_RAISED()` event will be subsequently be fired.
+# 2. Similarly, training may be interrupted by a keyboard interrupt (i.e. throwing an `InterruptException`). Training will halt, and an `INTERRUPT()` event will be fired.
+# 3. Training can be gracefully terminated via [`Ignite.terminate!(trainer)`](https://jondeuce.github.io/Ignite.jl/dev/#Ignite.terminate!-Tuple{Engine}), or equivalently, `trainer.should_terminate = true`. This will allow the current iteration will finish, but no further iterations will begin. Then, a `TERMINATE()` event will be fired followed by a `COMPLETED()` event.
+
 # ### Early stopping
 
-# To implement early stopping, we can add an event handler to `trainer` which checks the evaluation metrics and terminates `trainer` if the metrics fail to improve. To do so, we first define a training termination trigger using [`Flux.early_stopping`](http://fluxml.ai/Flux.jl/stable/training/callbacks/#Flux.early_stopping):
+# To implement early stopping, we can add an event handler to `trainer` which checks the evaluation metrics and gracefully terminates `trainer` if the metrics fail to improve. To do so, we first define a training termination trigger using [`Flux.early_stopping`](http://fluxml.ai/Flux.jl/stable/training/callbacks/#Flux.early_stopping):
 
 ## Callback which returns `true` if the eval loss fails to decrease by
 ## at least `min_dist` for two consecutive evaluations
@@ -99,7 +106,7 @@ early_stop_trigger = Flux.early_stopping(2; init_score = Inf32, min_dist = 5f-3)
     return value(evaluator.state.metrics["abs_err"])
 end
 
-# Next, add an event handler to `trainer` which checks the early stopping trigger and terminates training via `Ignite.terminate!` if the trigger returns `true`:
+# Then, we add an event handler to `trainer` which checks the early stopping trigger and terminates training if the trigger returns `true`:
 
 ## This handler must fire every 5th epoch, the same as the evaluation event handler,
 ## to ensure new evaluation metrics are available

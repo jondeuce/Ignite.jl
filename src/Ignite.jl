@@ -8,7 +8,7 @@ using DataStructures: DefaultOrderedDict, OrderedDict
 using DocStringExtensions: README, TYPEDEF, TYPEDFIELDS, TYPEDSIGNATURES
 using TimerOutputs: TimerOutput, @timeit, print_timer, reset_timer!
 
-export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent, AbstractErrorEvent
+export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
 export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
@@ -45,28 +45,21 @@ abstract type AbstractLoopEvent <: AbstractFiringEvent end
 
 (EVENT::Type{<:AbstractLoopEvent})(; kwargs...) = filter_event(EVENT(); kwargs...)
 
-"""
-$(TYPEDEF)
-
-Abstract supertype for events triggered by errors during the execution of [`Ignite.run!`](@ref).
-"""
-abstract type AbstractErrorEvent <: AbstractFiringEvent end
-
-struct STARTED <: AbstractLoopEvent end
 struct EPOCH_STARTED <: AbstractLoopEvent end
 struct ITERATION_STARTED <: AbstractLoopEvent end
 struct GET_BATCH_STARTED <: AbstractLoopEvent end
 struct GET_BATCH_COMPLETED <: AbstractLoopEvent end
 struct ITERATION_COMPLETED <: AbstractLoopEvent end
 struct EPOCH_COMPLETED <: AbstractLoopEvent end
-struct COMPLETED <: AbstractLoopEvent end
 
-struct INTERRUPT <: AbstractErrorEvent end
-struct EXCEPTION_RAISED <: AbstractErrorEvent end
-struct DATALOADER_STOP_ITERATION <: AbstractErrorEvent end
-struct TERMINATE <: AbstractErrorEvent end
+struct STARTED <: AbstractFiringEvent end
+struct TERMINATE <: AbstractFiringEvent end
+struct COMPLETED <: AbstractFiringEvent end
 
-struct TerminationException <: Exception end
+struct INTERRUPT <: AbstractFiringEvent end
+struct EXCEPTION_RAISED <: AbstractFiringEvent end
+struct DATALOADER_STOP_ITERATION <: AbstractFiringEvent end
+
 struct DataLoaderEmptyException <: Exception end
 struct DataLoaderUnknownLengthException <: Exception end
 
@@ -221,6 +214,20 @@ function initialize!(engine::Engine; max_epochs::Int, epoch_length::Int)
     return engine
 end
 
+function isdone(engine::Engine)
+    iteration = engine.state.iteration
+    epoch = engine.state.epoch
+    max_epochs = engine.state.max_epochs
+    epoch_length = engine.state.epoch_length
+
+    return !any(isnothing, (iteration, epoch, max_epochs, epoch_length)) && ( # counters are initialized
+        engine.should_terminate || ( # early termination
+            epoch == max_epochs &&
+            iteration == epoch_length * max_epochs # regular termination
+        )
+    )
+end
+
 """
     $(TYPEDSIGNATURES)
 
@@ -234,23 +241,11 @@ end
 """
     $(TYPEDSIGNATURES)
 
-Terminate the engine by setting `engine.should_terminate = true` and throwing a `TerminationException`.
+Terminate the engine by setting `engine.should_terminate = true`.
 """
 function terminate!(engine::Engine)
     engine.should_terminate = true
-    throw(TerminationException())
-end
-
-"""
-    $(TYPEDSIGNATURES)
-
-Terminate the engine if `engine.should_terminate == true`.
-See [`terminate!`](@ref).
-"""
-function maybe_terminate!(engine::Engine)
-    if engine.should_terminate
-        terminate!(engine)
-    end
+    return engine
 end
 
 """
@@ -268,7 +263,6 @@ end
 #### Run engine
 
 function load_batch!(engine::Engine, dl::DataCycler, iter_state)
-    maybe_terminate!(engine)
     to = engine.timer
 
     engine.state.times[GET_BATCH_STARTED()] = time()
@@ -283,7 +277,6 @@ function load_batch!(engine::Engine, dl::DataCycler, iter_state)
 end
 
 function process_function!(engine::Engine, batch)
-    maybe_terminate!(engine)
     to = engine.timer
 
     engine.state.times[ITERATION_STARTED()] = time()
@@ -320,7 +313,9 @@ Conceptually, running the engine is roughly equivalent to the following:
 7. At the end of each iteration, `ITERATION_COMPLETED()` event is fired.
 8. At the end of each epoch, `EPOCH_COMPLETED()` event is fired.
 9. At the end of all the epochs, `COMPLETED()` event is fired.
-10. Finally, `TERMINATE()` event is fired if `engine.should_terminate == true`.
+
+If `engine.should_terminate` is set to `true` while running the engine, the engine will be terminated gracefully after the next completed iteration.
+This will subsequently trigger a `TERMINATE()` event to be fired followed by a `COMPLETED()` event.
 """
 function run!(
         engine::Engine,
@@ -357,12 +352,18 @@ function run!(
                     engine.state.iteration += 1
                     process_function!(engine, batch)
                 end
+                engine.should_terminate && break
 
                 @timeit to "Event: EPOCH_COMPLETED" fire_event!(engine, EPOCH_COMPLETED())
                 engine.state.times[EPOCH_COMPLETED()] = time() - engine.state.times[EPOCH_STARTED()]
 
                 hours, mins, secs = to_hours_mins_secs(engine.state.times[EPOCH_COMPLETED()])
                 @info "Epoch[$(engine.state.epoch)] Complete. Time taken: $(hours):$(mins):$(secs)"
+            end
+
+            if engine.should_terminate
+                @info "Terminating run"
+                @timeit to "Event: TERMINATE" fire_event!(engine, TERMINATE())
             end
 
             @timeit to "Event: COMPLETED" fire_event!(engine, COMPLETED())
@@ -372,16 +373,11 @@ function run!(
             @info "Engine run complete. Time taken: $(hours):$(mins):$(secs)"
 
         catch e
-            user_terminated = engine.should_terminate
-            engine.should_terminate = true
             engine.exception = e
 
             if e isa InterruptException
                 @info "User interrupt"
                 @timeit to "Event: INTERRUPT" fire_event!(engine, INTERRUPT())
-
-            elseif e isa TerminationException
-                @info "Termination event triggered"
 
             elseif e isa DataLoaderEmptyException
                 @error "Restarting data loader failed: `iterate(dataloader)` returned `nothing`"
@@ -395,11 +391,7 @@ function run!(
                 @timeit to "Event: EXCEPTION_RAISED" fire_event!(engine, EXCEPTION_RAISED())
             end
 
-            @timeit to "Event: TERMINATE" fire_event!(engine, TERMINATE())
-
-            if !user_terminated
-                @error sprint(showerror, e, catch_backtrace())
-            end
+            @error sprint(showerror, e, catch_backtrace())
 
         finally
             return engine
@@ -415,10 +407,9 @@ end
 Execute all event handlers triggered by the firing event `e`.
 """
 function fire_event!(engine::Engine, e::AbstractFiringEvent)
-    !(e isa AbstractErrorEvent) && maybe_terminate!(engine)
-
     engine.state.last_event = e
     engine.state.counters[e] += 1
+
     fire_event_handlers!(engine, e)
 
     return engine

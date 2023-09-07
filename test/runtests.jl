@@ -92,7 +92,7 @@ using Logging: NullLogger
         event_filter = timeout_filter(1.0)
         t₀ = time()
         while (Δt = time() - t₀) < 2.0
-            @test event_filter(engine, event) == (Δt >= 1.0)
+            @test event_filter(engine, event) === (Δt >= 1.0)
             sleep(0.3)
         end
     end
@@ -178,12 +178,13 @@ using Logging: NullLogger
                 engine.state.terminate_event_fired = true
             end
 
-            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.TerminationException
-
-            @test trainer.should_terminate
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.isdone(trainer) === true
+            @test trainer.exception === nothing
+            @test trainer.should_terminate === true
             @test trainer.state.iteration == epoch_length
             @test trainer.state.epoch == 1
-            @test trainer.state.terminate_event_fired == true
+            @test trainer.state.terminate_event_fired === true
         end
 
         @testset "all default events" begin
@@ -210,25 +211,57 @@ using Logging: NullLogger
                 @test engine.state.iteration == max_epochs * epoch_length
             end
             Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.isdone(trainer) === true
         end
 
         @testset "event ordering" begin
-            max_epochs, epoch_length = 7, 3
-            final_iter = epoch_length * (max_epochs - 1) + 1
-            trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
+            for early_exit_mode in [:interrupt, :terminate, :exception]
+                max_epochs, epoch_length = 7, 3
+                final_iter = epoch_length * (max_epochs - 1) + 1
+                trainer, dl = dummy_trainer_and_loader(; max_epochs, epoch_length)
 
-            event_list = Any[]
-            add_event_handler!(trainer, EPOCH_COMPLETED(; every = 3) | INTERRUPT() | TERMINATE()) do engine
-                push!(event_list, engine.state.last_event)
+                event_list = Any[]
+                event_to_log = EPOCH_COMPLETED(; every = 3) | INTERRUPT() | EXCEPTION_RAISED() | TERMINATE() | COMPLETED()
+                add_event_handler!(trainer, event_to_log) do engine
+                    push!(event_list, engine.state.last_event)
+                end
+
+                if early_exit_mode === :interrupt
+                    add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
+                        @test engine.state.iteration == final_iter
+                        throw(InterruptException())
+                    end
+
+                    Ignite.run!(trainer, dl; max_epochs, epoch_length)
+                    @test Ignite.isdone(trainer) === false
+                    @test trainer.exception isa InterruptException
+                    @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), INTERRUPT()]
+
+                elseif early_exit_mode === :terminate
+                    add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
+                        @test engine.state.iteration == final_iter
+                        engine.should_terminate = true
+                    end
+
+                    Ignite.run!(trainer, dl; max_epochs, epoch_length)
+                    @test Ignite.isdone(trainer) === true
+                    @test trainer.exception === nothing
+                    @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), TERMINATE(), COMPLETED()]
+
+                elseif early_exit_mode === :exception
+                    add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
+                        @test engine.state.iteration == final_iter
+                        1 + nothing # trigger MethodError
+                    end
+
+                    Ignite.run!(trainer, dl; max_epochs, epoch_length)
+                    @test Ignite.isdone(trainer) === false
+                    @test trainer.exception isa MethodError
+                    @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), EXCEPTION_RAISED()]
+                else
+                    error("Unknown early exit mode: :$(early_exit_mode)")
+                end
             end
-            add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
-                @test engine.state.iteration == final_iter
-                throw(InterruptException())
-            end
-
-            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa InterruptException
-
-            @test event_list == Any[EPOCH_COMPLETED(), EPOCH_COMPLETED(), INTERRUPT(), TERMINATE()]
         end
 
         @testset "default epoch length" begin
@@ -236,8 +269,10 @@ using Logging: NullLogger
             trainer = dummy_engine()
             dl = 1:5
 
-            # `length` fails for infinite data loader
-            @test Ignite.run!(trainer, Iterators.cycle(dl)).exception isa Ignite.DataLoaderUnknownLengthException
+            # test that `length` fails for infinite data loader
+            Ignite.run!(trainer, Iterators.cycle(dl))
+            @test Ignite.isdone(trainer) === false
+            @test trainer.exception isa Ignite.DataLoaderUnknownLengthException
 
             dl = collect(dl)
             add_event_handler!(trainer, ITERATION_COMPLETED()) do engine
@@ -245,6 +280,7 @@ using Logging: NullLogger
             end
 
             Ignite.run!(trainer, dl)
+            @test Ignite.isdone(trainer) === true
         end
 
         @testset "empty data loader" begin
@@ -256,8 +292,10 @@ using Logging: NullLogger
                 engine.state.dataloader_stop_event_fired = true
             end
 
-            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa Ignite.DataLoaderEmptyException
-            @test trainer.state.dataloader_stop_event_fired == true
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.isdone(trainer) === false
+            @test trainer.exception isa Ignite.DataLoaderEmptyException
+            @test trainer.state.dataloader_stop_event_fired === true
         end
 
         @testset "exception raised" begin
@@ -270,8 +308,10 @@ using Logging: NullLogger
                 engine.state.exception_raised_event_fired = true
             end
 
-            @test Ignite.run!(trainer, dl; max_epochs, epoch_length).exception isa UndefVarError
-            @test trainer.state.exception_raised_event_fired == true
+            Ignite.run!(trainer, dl; max_epochs, epoch_length)
+            @test Ignite.isdone(trainer) === false
+            @test trainer.exception isa UndefVarError
+            @test trainer.state.exception_raised_event_fired === true
         end
 
         @testset "many handlers" begin
@@ -289,6 +329,7 @@ using Logging: NullLogger
             end
 
             Ignite.run!(trainer, dl)
+            @test Ignite.isdone(trainer) === true
             @test buffer == 1:num_handlers
         end
 
@@ -303,6 +344,7 @@ using Logging: NullLogger
             @test trainer.event_handlers[1].args[1] === data
 
             Ignite.run!(trainer, dl)
+            @test Ignite.isdone(trainer) === true
             @test data[] == sum(1:max_epochs * epoch_length)
         end
 
@@ -324,7 +366,7 @@ using Logging: NullLogger
             add_event_handler!(_ -> firing_event_counter[] += 1, trainer, NEW_FIRING_EVENT())
 
             Ignite.run!(trainer, [1]; epoch_length = 12)
-
+            @test Ignite.isdone(trainer) === true
             @test loop_event_counter[] == 4
             @test firing_event_counter[] == 12
         end
