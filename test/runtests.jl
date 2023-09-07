@@ -171,7 +171,7 @@ using Logging: NullLogger
             add_event_handler!(trainer, EPOCH_COMPLETED()) do engine
                 @test engine.state.output isa Dict
                 @test engine.state.output["loss"] isa Float64
-                engine.should_terminate = true
+                Ignite.terminate!(engine)
             end
 
             add_event_handler!(trainer, TERMINATE()) do engine
@@ -240,7 +240,7 @@ using Logging: NullLogger
                 elseif early_exit_mode === :terminate
                     add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
                         @test engine.state.iteration == final_iter
-                        engine.should_terminate = true
+                        Ignite.terminate!(engine)
                     end
 
                     Ignite.run!(trainer, dl; max_epochs, epoch_length)
