@@ -2,7 +2,7 @@ using Pkg
 ignite_dir = realpath(joinpath(@__DIR__, "../.."))
 
 Pkg.activate(@__DIR__)
-Pkg.develop(path = ignite_dir)
+Pkg.develop(; path = ignite_dir)
 Pkg.update()
 
 using Literate

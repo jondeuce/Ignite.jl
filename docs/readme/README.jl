@@ -25,7 +25,7 @@ using Flux, Zygote, Optimisers, MLUtils # for training a neural network
 
 ## Build simple neural network and initialize Adam optimizer
 model = Chain(Dense(1 => 32, tanh), Dense(32 => 1))
-optim = Optimisers.setup(Optimisers.Adam(1f-3), model)
+optim = Flux.setup(Optimisers.Adam(1f-3), model)
 
 ## Create mock data and data loaders
 f(x) = 2x-x^3
@@ -41,7 +41,7 @@ eval_data_loader = DataLoader((; x = xtest, y = ytest); batchsize = 10, shuffle 
 function train_step(engine, batch)
     x, y = batch
     l, gs = Zygote.withgradient(m -> sum(abs2, m(x) .- y), model)
-    global optim, model = Optimisers.update!(optim, model, gs[1])
+    Optimisers.update!(optim, model, gs[1])
     return Dict("loss" => l)
 end
 trainer = Engine(train_step)
@@ -93,8 +93,8 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
 # There are several ways to stop a training run before it has completed:
 # 1. Throw an exception as usual. This will immediately stop training. An `EXCEPTION_RAISED()` event will be subsequently be fired.
-# 2. Similarly, training may be interrupted by a keyboard interrupt (i.e. throwing an `InterruptException`). Training will halt, and an `INTERRUPT()` event will be fired.
-# 3. Training can be gracefully terminated via [`Ignite.terminate!(trainer)`](https://jondeuce.github.io/Ignite.jl/dev/#Ignite.terminate!-Tuple{Engine}), or equivalently, `trainer.should_terminate = true`. This will allow the current iteration will finish, but no further iterations will begin. Then, a `TERMINATE()` event will be fired followed by a `COMPLETED()` event.
+# 2. Use a keyboard interrupt, i.e. throw an `InterruptException` via `Ctrl+C` or `Cmd+C`. Training will halt, and an `INTERRUPT()` event will be fired.
+# 3. Gracefully terminate via [`Ignite.terminate!(trainer)`](https://jondeuce.github.io/Ignite.jl/dev/#Ignite.terminate!-Tuple{Engine}), or equivalently, `trainer.should_terminate = true`. This will allow the current iteration to finish but no further iterations will begin. Then, a `TERMINATE()` event will be fired followed by a `COMPLETED()` event.
 
 # ### Early stopping
 
@@ -124,13 +124,14 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
 # ### Artifact saving
 
-# Logging artifacts can be easily added to the trainer, again without modifying the above code. For example, save the current model and optimizer state to disk every 10 epochs using [`BSON.jl`](https://github.com/JuliaIO/BSON.jl):
+# Logging artifacts can be easily added to the trainer, again without modifying the above code. For example, save the current model and optimizer state to disk every 10 epochs using [`JLD2.jl`](https://github.com/JuliaIO/JLD2.jl):
 
-using BSON: @save
+using JLD2
 
 ## Save model and optimizer state every 10 epochs
 add_event_handler!(trainer, EPOCH_COMPLETED(every = 10)) do engine
-    @save "model_and_optim.bson" model optim
+    model_state = Flux.state(model)
+    jldsave("model_and_optim.jld2"; model_state, optim)
     @info "Saved model and optimizer state to disk"
 end
 
@@ -180,7 +181,7 @@ function train_step(engine, batch)
 
     ## Update the model's parameters
     fire_event!(engine, OPTIM_STEP_STARTED())
-    global optim, model = Optimisers.update!(optim, model, gs[1])
+    Optimisers.update!(optim, model, gs[1])
     fire_event!(engine, OPTIM_STEP_COMPLETED())
 
     return Dict("loss" => l)
