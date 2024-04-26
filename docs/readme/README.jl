@@ -25,11 +25,11 @@ using Flux, Zygote, Optimisers, MLUtils # for training a neural network
 
 ## Build simple neural network and initialize Adam optimizer
 model = Chain(Dense(1 => 32, tanh), Dense(32 => 1))
-optim = Flux.setup(Optimisers.Adam(1f-3), model)
+optim = Flux.setup(Optimisers.Adam(1.0f-3), model)
 
 ## Create mock data and data loaders
-f(x) = 2x-x^3
-xtrain, xtest = 2 * rand(Float32, 1, 10_000) .- 1, collect(reshape(range(-1f0, 1f0, length = 100), 1, :))
+f(x) = 2x - x^3
+xtrain, xtest = 2 * rand(Float32, 1, 10_000) .- 1, collect(reshape(range(-1.0f0, 1.0f0; length = 100), 1, :))
 ytrain, ytest = f.(xtrain), f.(xtest)
 train_data_loader = DataLoader((; x = xtrain, y = ytrain); batchsize = 64, shuffle = true, partial = false)
 eval_data_loader = DataLoader((; x = xtest, y = ytest); batchsize = 10, shuffle = false)
@@ -81,7 +81,7 @@ add_event_handler!(evaluator, ITERATION_COMPLETED()) do engine
 end
 
 ## Add an event handler to `trainer` which runs `evaluator` every 5 epochs:
-add_event_handler!(trainer, EPOCH_COMPLETED(every = 5)) do engine
+add_event_handler!(trainer, EPOCH_COMPLETED(; every = 5)) do engine
     Ignite.run!(evaluator, eval_data_loader)
     @info "Evaluation metrics: abs_err = $(evaluator.state.metrics["abs_err"])"
 end
@@ -102,7 +102,7 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 
 ## Callback which returns `true` if the eval loss fails to decrease by
 ## at least `min_dist` for two consecutive evaluations
-early_stop_trigger = Flux.early_stopping(2; init_score = Inf32, min_dist = 5f-3) do
+early_stop_trigger = Flux.early_stopping(2; init_score = Inf32, min_dist = 5.0f-3) do
     return value(evaluator.state.metrics["abs_err"])
 end
 
@@ -110,7 +110,7 @@ end
 
 ## This handler must fire every 5th epoch, the same as the evaluation event handler,
 ## to ensure new evaluation metrics are available
-add_event_handler!(trainer, EPOCH_COMPLETED(every = 5)) do engine
+add_event_handler!(trainer, EPOCH_COMPLETED(; every = 5)) do engine
     if early_stop_trigger()
         @info "Stopping early"
         Ignite.terminate!(trainer)
@@ -129,7 +129,7 @@ Ignite.run!(trainer, train_data_loader; max_epochs = 25, epoch_length = 100)
 using JLD2
 
 ## Save model and optimizer state every 10 epochs
-add_event_handler!(trainer, EPOCH_COMPLETED(every = 10)) do engine
+add_event_handler!(trainer, EPOCH_COMPLETED(; every = 10)) do engine
     model_state = Flux.state(model)
     jldsave("model_and_optim.jld2"; model_state, optim)
     @info "Saved model and optimizer state to disk"
@@ -150,7 +150,7 @@ end
 
 # The boolean operators `|` and `&` can be used to combine events together:
 
-add_event_handler!(trainer, EPOCH_COMPLETED(every = 10) | COMPLETED()) do engine
+add_event_handler!(trainer, EPOCH_COMPLETED(; every = 10) | COMPLETED()) do engine
     ## Runs at the end of every 10th epoch, or when training is completed
 end
 
@@ -190,6 +190,6 @@ trainer = Engine(train_step)
 
 # Then, add event handlers for these custom events as usual:
 
-add_event_handler!(trainer, BACKWARD_COMPLETED(every = 10)) do engine
+add_event_handler!(trainer, BACKWARD_COMPLETED(; every = 10)) do engine
     ## This code runs after every 10th backward pass is completed
 end

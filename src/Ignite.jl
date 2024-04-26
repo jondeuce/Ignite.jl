@@ -108,16 +108,16 @@ Base.@kwdef struct State <: AbstractDict{Symbol, Any}
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
         nothing,
         OrderedDict{Symbol, Any}(
-            :iteration    => nothing, # 1-based, the first iteration is 1
-            :epoch        => nothing, # 1-based, the first epoch is 1
-            :max_epochs   => nothing, # number of epochs to run
+            :iteration => nothing, # 1-based, the first iteration is 1
+            :epoch => nothing, # 1-based, the first epoch is 1
+            :max_epochs => nothing, # number of epochs to run
             :epoch_length => nothing, # number of batches processed per epoch
-            :output       => nothing, # most recent output of `process_function`
-            :last_event   => nothing, # most recent event fired
-            :counters     => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event counters
-            :times        => OrderedDict{AbstractFiringEvent, Float64}(), # firing event times
-            # :seed       => nothing, # seed to set at each epoch
-            # :metrics    => nothing, # dictionary with defined metrics
+            :output => nothing, # most recent output of `process_function`
+            :last_event => nothing, # most recent event fired
+            :counters => DefaultOrderedDict{AbstractFiringEvent, Int, Int}(0), # firing event counters
+            :times => OrderedDict{AbstractFiringEvent, Float64}(), # firing event times
+            # :seed => nothing, # seed to set at each epoch
+            # :metrics => nothing, # dictionary with defined metrics
         ),
     )
 end
@@ -127,6 +127,7 @@ Base.getindex(s::State, k::Symbol) = getindex(state(s), k)
 Base.setindex!(s::State, v, k::Symbol) = setindex!(state(s), v, k)
 Base.getproperty(s::State, k::Symbol) = s[k]
 Base.setproperty!(s::State, k::Symbol, v) = (s[k] = v)
+Base.propertynames(s::State) = collect(keys(state(s)))
 Base.get(s::State, k::Symbol, v) = get(state(s), k, v)
 Base.get!(s::State, k::Symbol, v) = get!(state(s), k, v)
 
@@ -318,11 +319,11 @@ If `engine.should_terminate` is set to `true` while running the engine, the engi
 This will subsequently trigger a `TERMINATE()` event to be fired followed by a `COMPLETED()` event.
 """
 function run!(
-        engine::Engine,
-        dataloader;
-        max_epochs::Int = 1,
-        epoch_length::Union{Int, Nothing} = nothing,
-    )
+    engine::Engine,
+    dataloader;
+    max_epochs::Int = 1,
+    epoch_length::Union{Int, Nothing} = nothing,
+)
 
     logger = something(engine.logger, current_logger())
     to = engine.timer
@@ -515,14 +516,14 @@ once_filter(once::Union{Int, <:AbstractVector{Int}}) = OnceFilter(once)
 
 Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `throttle` seconds has passed since it was last fired.
 """
-throttle_filter(throttle::Real) = ThrottleFilter(throttle, Ref(-Inf))
+throttle_filter(throttle::Real, last_fire::Real = -Inf) = ThrottleFilter(throttle, Ref(last_fire))
 
 """
     $(TYPEDSIGNATURES)
 
 Creates an event filter function for use in a `FilteredEvent` that returns `true` if at least `timeout` seconds has passed since the filter function was created.
 """
-timeout_filter(timeout::Real) = TimeoutFilter(timeout, time())
+timeout_filter(timeout::Real, start_time::Real = time()) = TimeoutFilter(timeout, start_time)
 
 function to_hours_mins_secs(time_taken)
     mins, secs = divrem(time_taken, 60.0)

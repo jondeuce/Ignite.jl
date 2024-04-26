@@ -12,12 +12,12 @@ using Logging: NullLogger
     end
 
     function dummy_engine(f = dummy_process_function; logger = NullLogger(), kwargs...)
-        Engine(f; kwargs..., logger)
+        return Engine(f; kwargs..., logger)
     end
 
     function dummy_trainer_and_loader(args...; max_epochs = 10, epoch_length = 10, kwargs...)
         engine = dummy_engine(args...; kwargs...)
-        dataloader = (rand(3) for _ in 1:max_epochs * epoch_length)
+        dataloader = (rand(3) for _ in 1:max_epochs*epoch_length)
         return engine, dataloader
     end
 
@@ -80,20 +80,25 @@ using Logging: NullLogger
         engine, event = dummy_engine(), EPOCH_COMPLETED() # dummy arguments
         event_filter = throttle_filter(1.0)
         @test event_filter(engine, event) # first call is unthrottled
-        sleep(0.6); @test !event_filter(engine, event)
-        sleep(0.6); @test event_filter(engine, event) # throttle resets
-        sleep(0.3); @test !event_filter(engine, event)
-        sleep(0.3); @test !event_filter(engine, event)
-        sleep(0.6); @test event_filter(engine, event) # throttle resets
+        sleep(0.6)
+        @test !event_filter(engine, event)
+        sleep(0.6)
+        @test event_filter(engine, event) # throttle resets
+        sleep(0.3)
+        @test !event_filter(engine, event)
+        sleep(0.3)
+        @test !event_filter(engine, event)
+        sleep(0.6)
+        @test event_filter(engine, event) # throttle resets
     end
 
     @testset "timeout filter" begin
         engine, event = dummy_engine(), EPOCH_COMPLETED() # dummy arguments
-        event_filter = timeout_filter(1.0)
-        t₀ = time()
-        while (Δt = time() - t₀) < 2.0
-            @test event_filter(engine, event) === (Δt >= 1.0)
-            sleep(0.3)
+        event_filter = timeout_filter(0.8)
+        t₀ = event_filter.start_time[]
+        while (Δt = time() - t₀) < 1.5
+            @test event_filter(engine, event) === (Δt >= 0.8)
+            sleep(0.25)
         end
     end
 
@@ -144,6 +149,8 @@ using Logging: NullLogger
         @test get(s, :new_field_4, 4.0) == 4.0
         @test !haskey(s, :new_field_4)
         @test length(s) == length(State()) + 3 == 11
+        @test all(k ∈ propertynames(s) for k in [:iteration, :epoch, :new_field_1, :new_field_2, :new_field_3])
+        @test propertynames(s) == collect(keys(Ignite.state(s)))
         @test OrderedDict(k => v for (k, v) in s) == Ignite.state(s)
     end
 
@@ -251,7 +258,7 @@ using Logging: NullLogger
                 elseif early_exit_mode === :exception
                     add_event_handler!(trainer, ITERATION_COMPLETED(; once = final_iter)) do engine
                         @test engine.state.iteration == final_iter
-                        1 + nothing # trigger MethodError
+                        return 1 + nothing # trigger MethodError
                     end
 
                     Ignite.run!(trainer, dl; max_epochs, epoch_length)
@@ -345,14 +352,14 @@ using Logging: NullLogger
 
             Ignite.run!(trainer, dl)
             @test Ignite.isdone(trainer) === true
-            @test data[] == sum(1:max_epochs * epoch_length)
+            @test data[] == sum(1:max_epochs*epoch_length)
         end
 
         @testset "custom events" begin
             struct NEW_LOOP_EVENT <: AbstractLoopEvent end
             struct NEW_FIRING_EVENT <: AbstractFiringEvent end
 
-            @test NEW_LOOP_EVENT(every = 3) isa FilteredEvent
+            @test NEW_LOOP_EVENT(; every = 3) isa FilteredEvent
             @test_throws MethodError NEW_FIRING_EVENT(every = 3)
 
             trainer = dummy_engine() do engine, batch
@@ -362,7 +369,7 @@ using Logging: NullLogger
             end
 
             loop_event_counter, firing_event_counter = Ref(0), Ref(0)
-            add_event_handler!(_ -> loop_event_counter[] += 1, trainer, NEW_LOOP_EVENT(every = 3))
+            add_event_handler!(_ -> loop_event_counter[] += 1, trainer, NEW_LOOP_EVENT(; every = 3))
             add_event_handler!(_ -> firing_event_counter[] += 1, trainer, NEW_FIRING_EVENT())
 
             Ignite.run!(trainer, [1]; epoch_length = 12)

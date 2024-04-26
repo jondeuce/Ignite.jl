@@ -1,6 +1,6 @@
 using Pkg
 Pkg.activate(@__DIR__)
-Pkg.develop(path = joinpath(@__DIR__, ".."))
+Pkg.develop(; path = joinpath(@__DIR__, ".."))
 Pkg.update()
 
 using Ignite
@@ -28,10 +28,10 @@ function dummy_event_handlers!(engine)
         @assert mod(engine.state.iteration, engine.state.epoch_length) == 0
     end
     add_event_handler!(engine, ITERATION_STARTED()) do engine
-        Ignite.@timeit engine.timer "dummy timing" 1+1
+        Ignite.@timeit engine.timer "dummy timing" 1 + 1
     end
     add_event_handler!(engine, ITERATION_COMPLETED()) do engine
-        Ignite.@timeit engine.timer "dummy timing" 1+1
+        Ignite.@timeit engine.timer "dummy timing" 1 + 1
     end
     add_event_handler!(engine, EPOCH_COMPLETED()) do engine
         @assert mod1(engine.state.iteration, engine.state.epoch_length) == engine.state.epoch_length
@@ -44,22 +44,24 @@ function dummy_event_handlers!(engine)
 end
 
 function run_trainer(;
-        dt = 1e-3,
-        max_epochs = 5,
-        epoch_length = round(Int, 1 / dt),
-        add_event_handlers = true,
-    )
+    dt = 1e-3,
+    max_epochs = 5,
+    epoch_length = round(Int, 1 / dt),
+    add_event_handlers = true,
+)
     dl = [rand(1) for _ in 1:100]
     trainer = Engine(dummy_process_function(dt))
     add_event_handlers && dummy_event_handlers!(trainer)
     @time Ignite.run!(trainer, dl; max_epochs, epoch_length)
 end
 
-trainer = run_trainer(max_epochs = 1, dt = 1e-3, add_event_handlers = false);
-trainer = run_trainer(max_epochs = 5, dt = 1e-3, add_event_handlers = false); Ignite.print_timer(trainer.timer)
+trainer = run_trainer(; max_epochs = 1, dt = 1e-3, add_event_handlers = false);
+trainer = run_trainer(; max_epochs = 5, dt = 1e-3, add_event_handlers = false);
+Ignite.print_timer(trainer.timer);
 
-trainer = run_trainer(max_epochs = 1, dt = 1e-3, add_event_handlers = true);
-trainer = run_trainer(max_epochs = 5, dt = 1e-3, add_event_handlers = true); Ignite.print_timer(trainer.timer)
+trainer = run_trainer(; max_epochs = 1, dt = 1e-3, add_event_handlers = true);
+trainer = run_trainer(; max_epochs = 5, dt = 1e-3, add_event_handlers = true);
+Ignite.print_timer(trainer.timer);
 
 function fire_all_events!(engine)
     fire_event!(engine, STARTED())
@@ -89,7 +91,9 @@ function bench_fire_events!(engine)
     for num_handlers in [0, 16, 64, 256, 257]
         set_event_handlers!(engine, num_handlers)
         @info "num. handlers: $(length(trainer.event_handlers))"
-        @info "fire_all_events!:"; @time fire_all_events!(engine); @btime fire_all_events!($engine)
+        @info "fire_all_events!:"
+        @time fire_all_events!(engine)
+        @btime fire_all_events!($engine)
     end
     return engine
 end
