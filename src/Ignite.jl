@@ -93,8 +93,9 @@ $(TYPEDEF)
 Current state of the engine.
 
 `State` is a light wrapper around a `DefaultOrderedDict{Symbol, Any, Nothing}` with the following keys:
-* `:iteration`: the current iteration, beginning with 1.
-* `:epoch`: the current epoch, beginning with 1.
+* `:iteration`: the current iteration, initialized with 0, incremented immediately before `ITERATION_STARTED()` event is fired.
+* `:epoch`: the current epoch, initialized with 0, set to `iteration ÷ epoch_length + 1` immediately before `EPOCH_STARTED()` event is fired.
+* `:epoch_iteration`: the current iteration within the current epoch, initialized with 0, set to `mod1(iteration, epoch_length)` immediately before `ITERATION_STARTED()` event is fired.
 * `:max_epochs`: The number of epochs to run.
 * `:epoch_length`: The number of batches processed per epoch.
 * `:output`: The output of `process_function` after a single iteration.
@@ -109,8 +110,9 @@ Base.@kwdef struct State <: AbstractDict{Symbol, Any}
     state::DefaultOrderedDict{Symbol, Any, Nothing} = DefaultOrderedDict{Symbol, Any, Nothing}(
         nothing,
         OrderedDict{Symbol, Any}(
-            :iteration => nothing, # 1-based, the first iteration is 1
-            :epoch => nothing, # 1-based, the first epoch is 1
+            :iteration => nothing, # current iteration
+            :epoch => nothing, # current epoch
+            :epoch_iteration => nothing, # current iteration within the current epoch
             :max_epochs => nothing, # number of epochs to run
             :epoch_length => nothing, # number of batches processed per epoch
             :output => nothing, # most recent output of `process_function`
@@ -254,26 +256,43 @@ default_epoch_length(::DataCycler, ::Base.IteratorSize) = throw(DataLoaderUnknow
 
 #### Engine methods
 
-function initialize!(engine::Engine; max_epochs::Int, epoch_length::Int)
+function initialize!(engine::Engine; max_epochs::Int, epoch_length::Int, resume_from_epoch::Union{Nothing, Int}, resume_from_iteration::Union{Nothing, Int})
+    @assert something(resume_from_iteration, 0) >= 0 "must restart from a non-negative iteration, got $resume_from_iteration"
+    @assert something(resume_from_epoch, 0) >= 0 "must restart from a non-negative epoch, got $resume_from_epoch"
+
+    if resume_from_epoch !== nothing
+        resume_from_iteration = something(resume_from_iteration, resume_from_epoch * epoch_length)
+    end
+
+    if resume_from_iteration === nothing
+        engine.state.iteration = 0
+        engine.state.epoch = 0
+        engine.state.epoch_iteration = 0
+    else
+        engine.state.iteration = resume_from_iteration
+        engine.state.epoch = resume_from_iteration == 0 ? 0 : resume_from_iteration ÷ epoch_length + 1
+        engine.state.epoch_iteration = resume_from_iteration == 0 ? 0 : mod1(resume_from_iteration, epoch_length)
+    end
+
     engine.should_terminate = false
     engine.exception = nothing
-    engine.state.iteration = 0
-    engine.state.epoch = 0
     engine.state.max_epochs = max_epochs
     engine.state.epoch_length = epoch_length
     engine.state.last_event = nothing
     empty!(engine.state.counters)
     empty!(engine.state.times)
+
     return engine
 end
 
 function isdone(engine::Engine)
     iteration = engine.state.iteration
     epoch = engine.state.epoch
+    epoch_iteration = engine.state.epoch_iteration
     max_epochs = engine.state.max_epochs
     epoch_length = engine.state.epoch_length
 
-    return !any(isnothing, (iteration, epoch, max_epochs, epoch_length)) && ( # counters are initialized
+    return !any(isnothing, (iteration, epoch, epoch_iteration, max_epochs, epoch_length)) && ( # counters are initialized
         engine.should_terminate || ( # early termination
             epoch == max_epochs &&
             iteration == epoch_length * max_epochs # regular termination
@@ -374,7 +393,10 @@ function run!(
     engine::Engine,
     dataloader;
     max_epochs::Int = 1,
-    epoch_length::Union{Int, Nothing} = nothing,
+    epoch_length::Union{Nothing, Int} = nothing,
+    resume::Bool = false,
+    resume_from_epoch::Union{Nothing, Int} = resume ? engine.state.epoch : nothing,
+    resume_from_iteration::Union{Nothing, Int} = resume ? engine.state.iteration : nothing,
 )
 
     logger = something(engine.logger, current_logger())
@@ -387,22 +409,26 @@ function run!(
             iter_state = nothing
             (epoch_length === nothing) && (epoch_length = default_epoch_length(dl))
 
-            initialize!(engine; max_epochs, epoch_length)
+            initialize!(engine; max_epochs, epoch_length, resume_from_epoch, resume_from_iteration)
 
             engine.state.times[STARTED()] = time()
-            @timeit to "Event: STARTED" fire_event!(engine, STARTED())
+            if engine.state.iteration == 0
+                @timeit to "Event: STARTED" fire_event!(engine, STARTED())
+            end
 
-            @timeit to "Epoch loop" while engine.state.epoch < max_epochs && !engine.should_terminate
-                engine.state.epoch += 1
+            @timeit to "Epoch loop" while engine.state.iteration < epoch_length * max_epochs && !engine.should_terminate
+                engine.state.epoch = engine.state.iteration ÷ epoch_length + 1
+
                 engine.state.times[EPOCH_STARTED()] = time()
-                @timeit to "Event: EPOCH_STARTED" fire_event!(engine, EPOCH_STARTED())
+                if mod(engine.state.iteration, epoch_length) == 0
+                    @timeit to "Event: EPOCH_STARTED" fire_event!(engine, EPOCH_STARTED())
+                end
 
-                epoch_iteration = 0
-                @timeit to "Iteration loop" while epoch_iteration < epoch_length && !engine.should_terminate
+                @timeit to "Iteration loop" while engine.state.iteration < epoch_length * engine.state.epoch && !engine.should_terminate
                     batch, iter_state = load_batch!(engine, dl, iter_state)
 
-                    epoch_iteration += 1
                     engine.state.iteration += 1
+                    engine.state.epoch_iteration = mod1(engine.state.iteration, epoch_length)
                     process_function!(engine, batch)
                 end
                 engine.should_terminate && break
@@ -461,7 +487,14 @@ Execute all event handlers triggered by the firing event `e`.
 """
 function fire_event!(engine::Engine, e::AbstractFiringEvent)
     engine.state.last_event = e
-    engine.state.counters[e] += 1
+
+    if e isa Union{ITERATION_STARTED, ITERATION_COMPLETED}
+        engine.state.counters[e] = something(engine.state.iteration, engine.state.counters[e] + 1)
+    elseif e isa Union{EPOCH_STARTED, EPOCH_COMPLETED}
+        engine.state.counters[e] = something(engine.state.epoch, engine.state.counters[e] + 1)
+    else
+        engine.state.counters[e] += 1
+    end
 
     fire_event_handlers!(engine, e)
 

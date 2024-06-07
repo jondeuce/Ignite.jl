@@ -138,18 +138,20 @@ using Logging: NullLogger
         s = State()
         s[:iteration] = 0
         s.epoch = 0
+        s.epoch_iteration = 0
         s[:new_field_1] = :one
         s.new_field_2 = "two"
         @test s[:iteration] == s.iteration == 0
         @test s[:epoch] == s.epoch == 0
+        @test s[:epoch_iteration] == s.epoch_iteration == 0
         @test s[:new_field_1] == s.new_field_1 == :one
         @test s[:new_field_2] == s.new_field_2 == "two"
         @test get!(s, :new_field_3, 3) == 3
         @test s[:new_field_3] == s.new_field_3 == 3
         @test get(s, :new_field_4, 4.0) == 4.0
         @test !haskey(s, :new_field_4)
-        @test length(s) == length(State()) + 3 == 11
-        @test all(k ∈ propertynames(s) for k in [:iteration, :epoch, :new_field_1, :new_field_2, :new_field_3])
+        @test length(s) == length(State()) + 3 == 12
+        @test all(k ∈ propertynames(s) for k in [:iteration, :epoch, :epoch_iteration, :new_field_1, :new_field_2, :new_field_3])
 
         @test keys(s) == keys(Ignite.state(s))
         @test values(s) == values(Ignite.state(s))
@@ -381,7 +383,7 @@ using Logging: NullLogger
             struct NEW_FIRING_EVENT <: AbstractFiringEvent end
 
             @test NEW_LOOP_EVENT(; every = 3) isa FilteredEvent
-            @test_throws MethodError NEW_FIRING_EVENT(every = 3)
+            @test_throws MethodError NEW_FIRING_EVENT(; every = 3)
 
             trainer = dummy_engine() do engine, batch
                 fire_event!(engine, NEW_LOOP_EVENT())
@@ -397,6 +399,84 @@ using Logging: NullLogger
             @test Ignite.isdone(trainer) === true
             @test loop_event_counter[] == 4
             @test firing_event_counter[] == 12
+        end
+
+        @testset "resume" begin
+            max_epochs = 4
+            epoch_length = 5
+            dl = 1:max_epochs*epoch_length
+
+            @testset "resume from interrupt" begin
+                for once_interrupt in 1:max_epochs*epoch_length
+                    engine = dummy_engine()
+
+                    iters_recorded = Int[]
+                    add_event_handler!(engine, ITERATION_COMPLETED()) do engine
+                        @test engine.state.counters[ITERATION_COMPLETED()] == engine.state.iteration
+                        push!(iters_recorded, engine.state.iteration)
+                    end
+                    epochs_recorded = Int[]
+                    add_event_handler!(engine, EPOCH_COMPLETED()) do engine
+                        @test engine.state.counters[EPOCH_COMPLETED()] == engine.state.epoch
+                        push!(epochs_recorded, engine.state.epoch)
+                    end
+
+                    add_event_handler!(engine, ITERATION_COMPLETED(; once = once_interrupt)) do engine
+                        engine.should_terminate = true
+                    end
+
+                    Ignite.run!(engine, dl; max_epochs, epoch_length)
+                    @test engine.state.iteration == once_interrupt
+                    @test engine.state.epoch == (once_interrupt - 1) ÷ epoch_length + 1
+                    @test iters_recorded == 1:once_interrupt
+                    @test epochs_recorded == 1:(once_interrupt-1)÷epoch_length
+
+                    empty!(iters_recorded)
+                    empty!(epochs_recorded)
+                    Ignite.run!(engine, dl; max_epochs, epoch_length, resume = true)
+                    @test iters_recorded == once_interrupt+1:max_epochs*epoch_length
+                    @test epochs_recorded == once_interrupt÷epoch_length+1:max_epochs
+                end
+            end
+
+            @testset "resume from epoch/iteration" begin
+                engine = dummy_engine()
+
+                start_recorded = Ref(false)
+                add_event_handler!(engine, STARTED()) do engine
+                    start_recorded[] = true
+                end
+                iters_recorded = Int[]
+                add_event_handler!(engine, ITERATION_COMPLETED()) do engine
+                    @test engine.state.counters[ITERATION_COMPLETED()] == engine.state.iteration
+                    push!(iters_recorded, engine.state.iteration)
+                end
+                epochs_recorded = Int[]
+                add_event_handler!(engine, EPOCH_COMPLETED()) do engine
+                    @test engine.state.counters[EPOCH_COMPLETED()] == engine.state.epoch
+                    push!(epochs_recorded, engine.state.epoch)
+                end
+
+                for resume_from_epoch in 0:max_epochs
+                    start_recorded[] = false
+                    empty!(iters_recorded)
+                    empty!(epochs_recorded)
+                    Ignite.run!(engine, dl; max_epochs, epoch_length, resume_from_epoch)
+                    @test start_recorded[] == (resume_from_epoch == 0)
+                    @test iters_recorded == (resume_from_epoch*epoch_length+1):max_epochs*epoch_length
+                    @test epochs_recorded == (resume_from_epoch+1):max_epochs
+                end
+
+                for resume_from_iteration in 0:max_epochs*epoch_length
+                    start_recorded[] = false
+                    empty!(iters_recorded)
+                    empty!(epochs_recorded)
+                    Ignite.run!(engine, dl; max_epochs, epoch_length, resume_from_iteration)
+                    @test start_recorded[] == (resume_from_iteration == 0)
+                    @test iters_recorded == resume_from_iteration+1:max_epochs*epoch_length
+                    @test epochs_recorded == (resume_from_iteration)÷epoch_length+1:max_epochs
+                end
+            end
         end
     end
 end
