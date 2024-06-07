@@ -150,8 +150,29 @@ using Logging: NullLogger
         @test !haskey(s, :new_field_4)
         @test length(s) == length(State()) + 3 == 11
         @test all(k ∈ propertynames(s) for k in [:iteration, :epoch, :new_field_1, :new_field_2, :new_field_3])
+
+        @test keys(s) == keys(Ignite.state(s))
+        @test values(s) == values(Ignite.state(s))
         @test propertynames(s) == collect(keys(Ignite.state(s)))
         @test OrderedDict(k => v for (k, v) in s) == Ignite.state(s)
+
+        @test !haskey(s, :new_field_5)
+        val_5 = @getsomething! s.new_field_5 = [5, 6]
+        @test haskey(s, :new_field_5)
+        @test val_5 == [5, 6]
+        push!(val_5, 7)
+        val_5′ = @getsomething! s.new_field_5 = :unused
+        @test val_5′ == [5, 6, 7]
+        @test val_5 === val_5′
+
+        @test !haskey(s, :new_field_6)
+        val_6 = getsomething!(() -> zeros(6), s, :new_field_6)
+        @test haskey(s, :new_field_6)
+        @test val_6 == zeros(6)
+        val_6 .= 1
+        val_6′ = getsomething!(() -> :unused, s, :new_field_6)
+        @test val_6′ == ones(6)
+        @test val_6 === val_6′
     end
 
     @testset "DataCycler" begin

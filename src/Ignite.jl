@@ -12,6 +12,7 @@ export AbstractEvent, AbstractFiringEvent, AbstractLoopEvent
 export STARTED, EPOCH_STARTED, ITERATION_STARTED, GET_BATCH_STARTED, GET_BATCH_COMPLETED, ITERATION_COMPLETED, EPOCH_COMPLETED, COMPLETED
 export INTERRUPT, EXCEPTION_RAISED, DATALOADER_STOP_ITERATION, TERMINATE
 export State, Engine, EventHandler, FilteredEvent, OrEvent, AndEvent
+export @getsomething!, getsomething!
 export filter_event, every_filter, once_filter, throttle_filter, timeout_filter
 export add_event_handler!, fire_event!
 
@@ -35,7 +36,7 @@ $(TYPEDEF)
 Abstract supertype for events fired during the normal execution of [`Ignite.run!`](@ref).
 
 A default convenience constructor `(EVENT::Type{<:AbstractLoopEvent})(; kwargs...)` is provided to allow for easy filtering of `AbstractLoopEvent`s.
-For example, `EPOCH_COMPLETED(every = 3)` will build a [`FilteredEvent`](@ref) which is triggered every third epoch.
+For example, `EPOCH_COMPLETED(every = 3)` will build a [`FilteredEvent`](@ref) which is triggered every third time an `EPOCH_COMPLETED()` event is fired.
 See [`filter_event`](@ref) for allowed keywords.
 
 By inheriting from `AbstractLoopEvent`, custom events will inherit these convenience constructors, too.
@@ -123,6 +124,9 @@ Base.@kwdef struct State <: AbstractDict{Symbol, Any}
 end
 state(s::State) = getfield(s, :state)
 
+Base.keys(s::State) = keys(state(s))
+Base.values(s::State) = values(state(s))
+Base.haskey(s::State, k::Symbol) = haskey(state(s), k)
 Base.getindex(s::State, k::Symbol) = getindex(state(s), k)
 Base.setindex!(s::State, v, k::Symbol) = setindex!(state(s), v, k)
 Base.getproperty(s::State, k::Symbol) = s[k]
@@ -133,6 +137,54 @@ Base.get!(s::State, k::Symbol, v) = get!(state(s), k, v)
 
 Base.iterate(s::State, args...) = iterate(state(s), args...)
 Base.length(s::State) = length(state(s))
+
+"""
+    y = @getsomething! engine.state.x = init
+
+Get the field `x` from `engine.state` if it exists and is not `nothing`,
+otherwise set it to `init` and return that value.
+Equivalent to
+
+```
+y = engine.state.x
+if y === nothing
+    y = engine.state.x = init
+end
+```
+
+Useful for initializing stateful fields.
+For example, to record all losses during training one could do the following:
+
+```
+losses = @getsomething! engine.state.losses = Float64[]
+push!(losses, loss)
+```
+
+See also the functional form [`getsomething!`](@ref).
+"""
+macro getsomething!(ex)
+    ex.head === :(=) || error("Expected assignment expression")
+    lhs, rhs = ex.args
+    lhs.head === :(.) || error("Expected dot expression")
+    f = Expr(:->, :(()), esc(rhs))
+    return Expr(:call, getsomething!, f, esc(lhs.args[1]), esc(lhs.args[2]))
+end
+
+"""
+    $(TYPEDSIGNATURES)
+
+Get the field `key` from the state `s` if it exists and is not `nothing`,
+otherwise set it to `f()` and return that value.
+
+Functional form of [`@getsomething!`](@ref).
+For example, the following two expressions are equivalent:
+
+```
+@getsomething! engine.state.x = init
+getsomething!(()->init, engine.state, :x)
+```
+"""
+getsomething!(f, s::State, key) = (val = s[key]) === nothing ? (s[key] = f()) : val
 
 """
 $(TYPEDEF)
