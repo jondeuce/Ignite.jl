@@ -10,9 +10,11 @@ Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
 [compat]
-Aqua = "0.6"
+Aqua = "0.6, 0.8"
 DataStructures = "0.18, 0.19"
 DocStringExtensions = "0.9"
+Logging = "1"
+Test = "1"
 TimerOutputs = "0.5"
 julia = "1"
 
